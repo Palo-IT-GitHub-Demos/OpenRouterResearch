@@ -1,0 +1,27 @@
+[
+  {
+    "prompt": "Return ONLY valid JSON with no extra text: {\"status\": \"ok\", \"value\": 42}",
+    "category": "json_output",
+    "responses": {}
+  },
+  {
+    "prompt": "Write a Python function `add(a: int, b: int) -> int` that returns the sum of two integers. Return only the function definition, no explanation.",
+    "category": "code_generation",
+    "responses": {}
+  },
+  {
+    "prompt": "If all Bloops are Razzles, and all Razzles are Lazzles, are all Bloops definitely Lazzles? Answer with YES or NO followed by a one-sentence explanation.",
+    "category": "logical_reasoning",
+    "responses": {}
+  },
+  {
+    "prompt": "Translate the word 'hello' into French, Spanish, and Japanese. Respond with a JSON object: {\"fr\": \"...\", \"es\": \"...\", \"ja\": \"...\"}",
+    "category": "instruction_following",
+    "responses": {}
+  },
+  {
+    "prompt": "List the first 5 prime numbers separated by commas and nothing else.",
+    "category": "instruction_following",
+    "responses": {}
+  }
+]

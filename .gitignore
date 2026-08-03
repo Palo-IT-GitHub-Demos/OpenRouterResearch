@@ -1,0 +1,16 @@
+CLAUDE.local.md
+.env
+.env.*
+*.local.*
+node_modules/
+__pycache__/
+dist/
+.venv*/
+*.pyc
+.DS_Store
+.pytest_cache/
+mlruns/
+mlruns.db
+results/*.csv
+results/*.json
+data/intermediate/*.json

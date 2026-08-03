@@ -1,0 +1,5 @@
+{
+  "name": "delivery",
+  "version": "0.2.3",
+  "description": "Story-to-PR delivery workflow: stories, design extraction (Figma), implementation plans, execution, and pull requests."
+}

@@ -1,0 +1,9 @@
+# Global owners — replace with your GitHub team handle
+* @none
+
+# AI artifacts — extra review required
+.github/copilot-instructions.md @none
+.github/skills/                  @none
+.github/agents/                  @none
+.claude/                         @none
+AGENTS.md                        @none

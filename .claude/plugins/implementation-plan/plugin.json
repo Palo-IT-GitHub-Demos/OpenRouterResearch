@@ -1,0 +1,5 @@
+{
+  "name": "implementation-plan",
+  "version": "0.1.0",
+  "description": "Create deterministic implementation plans for any project. Plans are fully executable by AI agents or humans, covering new features, algorithm work, refactoring, upgrades, infrastructure, or architecture changes."
+}

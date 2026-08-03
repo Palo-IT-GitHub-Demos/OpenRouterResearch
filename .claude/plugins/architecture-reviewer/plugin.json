@@ -1,0 +1,5 @@
+{
+  "name": "architecture-reviewer",
+  "version": "0.1.0",
+  "description": "Evidence-first architecture analysis toolkit for repository design reviews, Mermaid diagram creation/repair, and PDF-to-Markdown conversion."
+}

@@ -1,0 +1,14 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "pytest": true,
+        "/^source \\.venv/bin/activate && pytest tests/ -q --tb=short 2>&1 \\| tail -3 && echo \"---\" && python -m src\\.main 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^source \\.venv/bin/activate && pytest tests/ -q --tb=short 2>&1 \\| tail -3 && echo \"--- LAUNCHING BENCHMARK ---\" && python -m src\\.main 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "env": true
+    }
+}

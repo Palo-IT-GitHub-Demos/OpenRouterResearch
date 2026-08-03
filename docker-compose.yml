@@ -1,0 +1,18 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+    volumes:
+      # Mount project files with cached strategy for performance
+      - .:/workspaces/app:cached
+      # Prevent host node_modules from shadowing container's
+      - /workspaces/app/node_modules
+    env_file:
+      # Copy .env.example → .env and fill in secrets before running
+      - .env
+    ports:
+      - "8000:8000"   # Python API (FastAPI / Flask)
+      - "3000:3000"   # Node.js dev server
+    # Keep container alive for interactive development
+    command: sleep infinity
