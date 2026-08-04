@@ -1,23 +1,17 @@
-"""LLM-as-a-Judge quality evaluator.
+"""Quality evaluator — deterministic pre-evaluation + Copilot judge agents.
 
-Bias mitigations applied
-------------------------
-- **Position bias**: model responses are shuffled into random aliases (A, B, C …)
-  before being shown to the judge.  Aliases are remapped back to real model IDs
-  after scoring so results are always traceable.
-- **Verbosity bias**: the judge rubric explicitly instructs the model *not* to
-  favour longer answers and to score only accuracy and instruction-following.
-- **Structured output**: the judge must return a JSON object validated by the
-  ``JudgeOutput`` Pydantic model, preventing free-form hallucination of scores.
-- **Chain-of-Thought**: the judge is required to reason through its evaluation
-  in 3-5 sentences before assigning a score, reducing evaluation hallucinations.
+Evaluation strategy
+-------------------
+- **Phase 1** (``run_collect``): responses are collected from target models and
+  scored deterministically where possible (JSON validity, Python syntax).
+  Undecidable responses are saved as pending judgments.
+- **Phase 2** (Copilot agents): a judge agent (@judge-anthropic, @judge-openai
+  or @judge-google) reads the pending file and writes scored results.
+- **Phase 3** (``MergePipeline``): deterministic + Copilot scores are merged
+  with pricing and security data and exported.
 
-V2 additions
-------------
-- :class:`AsyncQualityJudge` — fully async, parallelises across prompts.
-- Deterministic pre-evaluation: JSON/code responses are checked with
-  :mod:`src.evaluators.deterministic_eval` before calling the LLM judge.
-- ``run_dataset`` collects model responses at runtime (no pre-filled fixture).
+The LLM-judge-via-OpenRouter path has been removed.  Judging is exclusively
+handled by GitHub Copilot agents — zero extra API cost.
 """
 
 from __future__ import annotations
@@ -45,8 +39,12 @@ class ModelScore(BaseModel):
     """Score for a single model alias as returned by the judge."""
 
     model_alias: str = Field(description="Alias assigned to the model (e.g. 'A').")
-    reasoning: str = Field(description="3-5 sentence chain-of-thought analysis before the score.")
-    score: int = Field(ge=1, le=5, description="Quality score from 1 (worst) to 5 (best).")
+    reasoning: str = Field(
+        description="3-5 sentence chain-of-thought analysis before the score."
+    )
+    score: int = Field(
+        ge=1, le=5, description="Quality score from 1 (worst) to 5 (best)."
+    )
 
 
 class JudgeOutput(BaseModel):
@@ -119,7 +117,8 @@ You MUST respond with a valid JSON object matching exactly this schema:
     ...
   ]
 }
-The "model_alias" field must be EXACTLY the single letter shown in [MODEL X] headers (e.g. "A", "B", "C").
+The "model_alias" field must be EXACTLY the single letter shown in [MODEL X] \
+headers (e.g. "A", "B", "C").
 Do not include any text outside the JSON object."""
 
 _USER_TEMPLATE = """\
@@ -185,7 +184,8 @@ class QualityJudge:
             model_id = alias_map.get(model_score.model_alias)
             if model_id is None:
                 logger.warning(
-                    "Judge returned unknown alias '%s'; skipping.", model_score.model_alias
+                    "Judge returned unknown alias '%s'; skipping.",
+                    model_score.model_alias,
                 )
                 continue
             results[model_id] = JudgeResult(
@@ -197,7 +197,7 @@ class QualityJudge:
         return results
 
     def run_dataset(self, prompts_path: Path) -> pd.DataFrame:
-        """Evaluate all prompts in a JSON fixture file (responses must be pre-filled)."""
+        """Evaluate all prompts in a fixture file (responses must be pre-filled)."""
         with prompts_path.open() as fh:
             dataset: list[dict[str, Any]] = json.load(fh)
 
@@ -208,7 +208,9 @@ class QualityJudge:
             if not responses:
                 continue
             logger.info("Evaluating prompt %d/%d …", idx + 1, len(dataset))
-            for model_id, result in self.evaluate(prompt=prompt, responses=responses).items():
+            for model_id, result in self.evaluate(
+                prompt=prompt, responses=responses
+            ).items():
                 rows.append(
                     {
                         "prompt_id": idx,
@@ -221,7 +223,9 @@ class QualityJudge:
 
         df = pd.DataFrame(rows)
         return (
-            df.sort_values(["prompt_id", "score"], ascending=[True, False]).reset_index(drop=True)
+            df.sort_values(["prompt_id", "score"], ascending=[True, False]).reset_index(
+                drop=True
+            )
             if not df.empty
             else df
         )
@@ -235,18 +239,17 @@ class QualityJudge:
 
 
 class AsyncQualityJudge:
-    """Async LLM-as-a-Judge with deterministic pre-evaluation and CoT prompting.
+    """Async quality evaluator with deterministic pre-evaluation.
 
     Evaluation flow per prompt:
-    1. Run deterministic checks (JSON validity, Python syntax, …) on each response.
-    2. If ALL responses have a definitive score → skip the LLM call (cost saving).
-    3. For undecidable responses → call the judge LLM with CoT prompt.
-    4. Collect responses from target models at runtime (no pre-filled fixture).
+    1. Collect responses from target models at runtime.
+    2. Run deterministic checks (JSON validity, Python syntax, …) on each response.
+    3. Responses with a definitive score → recorded directly.
+    4. Undecidable responses → saved as pending for a Copilot judge agent (Phase 2).
     """
 
-    def __init__(self, client: AsyncOpenRouterClient, judge_model: str) -> None:
+    def __init__(self, client: AsyncOpenRouterClient) -> None:
         self._client = client
-        self._judge_model = judge_model
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -256,24 +259,18 @@ class AsyncQualityJudge:
         responses: dict[str, str],
         category: str | None = None,
     ) -> dict[str, JudgeResult]:
-        """Score each model's response, applying deterministic checks first.
+        """Score each model's response using deterministic checks only.
 
-        Args:
-            prompt: The original prompt sent to the models.
-            responses: Mapping of ``{model_id: response_text}``.
-            category: Prompt category key (e.g. ``"json_output"``); used to
-                select the appropriate deterministic check.
-
-        Returns:
-            Mapping of ``{model_id: JudgeResult}`` with scores 1–5.
+        Undecidable responses (logical reasoning, free-form instruction
+        following) are omitted — they are scored by a Copilot judge agent
+        in Phase 2 via ``run_collect`` + ``make merge``.
         """
         if not responses:
             return {}
 
         results: dict[str, JudgeResult] = {}
-        undecidable: dict[str, str] = {}
 
-        # 1. Deterministic pre-evaluation.
+        # Deterministic pre-evaluation only.
         if category:
             check = CHECKS.get(category)
             if check is not None:
@@ -285,19 +282,7 @@ class AsyncQualityJudge:
                             score=cr.score,
                             reasoning=cr.reason,
                         )
-                    else:
-                        undecidable[model_id] = response
-            else:
-                undecidable = dict(responses)
-        else:
-            undecidable = dict(responses)
-
-        if not undecidable:
-            return results
-
-        # 2. LLM judge for undecidable responses.
-        llm_results = await self._llm_evaluate(prompt, undecidable)
-        results.update(llm_results)
+        # Undecidable responses are not scored here — use a Copilot judge agent.
         return results
 
     async def run_dataset(
@@ -305,44 +290,17 @@ class AsyncQualityJudge:
         prompts_path: Path,
         models: list[str],
     ) -> pd.DataFrame:
-        """Collect model responses and evaluate all prompts in a fixture file.
+        """Run deterministic evaluation and return scores as a DataFrame.
 
-        Args:
-            prompts_path: Path to a JSON file with a list of ``{prompt, category}``
-                objects.
-            models: List of OpenRouter model IDs to benchmark.
-
-        Returns:
-            DataFrame with columns: ``prompt_id``, ``prompt_preview``, ``model``,
-            ``score``, ``reasoning``.
+        Undecidable responses are not included. Use ``run_collect`` +
+        a Copilot judge agent (Phase 2) + ``make merge`` for complete results.
         """
-        with prompts_path.open() as fh:
-            dataset: list[dict[str, Any]] = json.load(fh)
-
-        async def _process(idx: int, entry: dict[str, Any]) -> list[dict[str, object]]:
-            prompt: str = entry["prompt"]
-            category: str | None = entry.get("category")
-            logger.info("Collecting responses for prompt %d/%d …", idx + 1, len(dataset))
-            responses = await self._collect_responses(prompt, models)
-            eval_results = await self.evaluate(
-                prompt=prompt, responses=responses, category=category
-            )
-            return [
-                {
-                    "prompt_id": idx,
-                    "prompt_preview": prompt[:80],
-                    "model": model_id,
-                    "score": r.score,
-                    "reasoning": r.reasoning,
-                }
-                for model_id, r in eval_results.items()
-            ]
-
-        batches = await asyncio.gather(*[_process(i, e) for i, e in enumerate(dataset)])
-        rows = [row for batch in batches for row in batch]
-        df = pd.DataFrame(rows)
+        result = await self.run_collect(prompts_path, models)
+        df = pd.DataFrame(result.deterministic_rows)
         return (
-            df.sort_values(["prompt_id", "score"], ascending=[True, False]).reset_index(drop=True)
+            df.sort_values(["prompt_id", "score"], ascending=[True, False]).reset_index(
+                drop=True
+            )
             if not df.empty
             else df
         )
@@ -373,7 +331,9 @@ class AsyncQualityJudge:
         async def _process(idx: int, entry: dict[str, Any]) -> None:
             prompt: str = entry["prompt"]
             category: str | None = entry.get("category")
-            logger.info("Collecting responses for prompt %d/%d …", idx + 1, len(dataset))
+            logger.info(
+                "Collecting responses for prompt %d/%d …", idx + 1, len(dataset)
+            )
             responses = await self._collect_responses(prompt, models)
 
             check = CHECKS.get(category or "") if category else None
@@ -383,14 +343,16 @@ class AsyncQualityJudge:
                 for model_id, response in responses.items():
                     cr = check.run(prompt, response)
                     if cr.score is not None:
-                        deterministic_rows.append({
-                            "prompt_id": idx,
-                            "prompt_preview": prompt[:80],
-                            "model": model_id,
-                            "score": cr.score,
-                            "reasoning": cr.reason,
-                            "source": "deterministic",
-                        })
+                        deterministic_rows.append(
+                            {
+                                "prompt_id": idx,
+                                "prompt_preview": prompt[:80],
+                                "model": model_id,
+                                "score": cr.score,
+                                "reasoning": cr.reason,
+                                "source": "deterministic",
+                            }
+                        )
                     else:
                         undecidable[model_id] = response
             else:
@@ -400,20 +362,28 @@ class AsyncQualityJudge:
                 model_ids = list(undecidable.keys())
                 random.shuffle(model_ids)
                 alias_map = {_alias(i): mid for i, mid in enumerate(model_ids)}
-                pending_judgments.append({
-                    "prompt_id": idx,
-                    "prompt": prompt,
-                    "prompt_preview": prompt[:80],
-                    "category": category,
-                    "alias_map": alias_map,
-                    "responses": {alias: undecidable[mid] for alias, mid in alias_map.items()},
-                })
+                pending_judgments.append(
+                    {
+                        "prompt_id": idx,
+                        "prompt": prompt,
+                        "prompt_preview": prompt[:80],
+                        "category": category,
+                        "alias_map": alias_map,
+                        "responses": {
+                            alias: undecidable[mid] for alias, mid in alias_map.items()
+                        },
+                    }
+                )
 
         await asyncio.gather(*[_process(i, e) for i, e in enumerate(dataset)])
 
         return CollectResult(
-            deterministic_rows=sorted(deterministic_rows, key=lambda r: int(str(r["prompt_id"]))),
-            pending_judgments=sorted(pending_judgments, key=lambda p: int(str(p["prompt_id"]))),
+            deterministic_rows=sorted(
+                deterministic_rows, key=lambda r: int(str(r["prompt_id"]))
+            ),
+            pending_judgments=sorted(
+                pending_judgments, key=lambda p: int(str(p["prompt_id"]))
+            ),
         )
 
     # ── Private helpers ────────────────────────────────────────────────────────
@@ -442,45 +412,6 @@ class AsyncQualityJudge:
 
         pairs = await asyncio.gather(*[_get(m) for m in models])
         return dict(pairs)
-
-    async def _llm_evaluate(
-        self, prompt: str, responses: dict[str, str]
-    ) -> dict[str, JudgeResult]:
-        """Call the judge LLM with position-shuffled aliases."""
-        model_ids = list(responses.keys())
-        random.shuffle(model_ids)
-        alias_map = {_alias(i): mid for i, mid in enumerate(model_ids)}
-        reverse_map = {v: k for k, v in alias_map.items()}
-
-        responses_block = "\n\n".join(
-            f"[MODEL {reverse_map[mid]}]\n{responses[mid]}" for mid in model_ids
-        )
-        user_message = _USER_TEMPLATE.format(
-            prompt=prompt, responses_block=responses_block
-        )
-
-        completion = await self._client.chat_completion(
-            model=self._judge_model,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
-            temperature=0,
-        )
-
-        raw = (completion.choices[0].message.content or "").strip()
-        judge_output = _parse_judge_output(raw)
-
-        results: dict[str, JudgeResult] = {}
-        for ms in judge_output.scores:
-            model_id = alias_map.get(ms.model_alias)
-            if model_id is None:
-                logger.warning("Judge returned unknown alias '%s'; skipping.", ms.model_alias)
-                continue
-            results[model_id] = JudgeResult(
-                model=model_id, score=ms.score, reasoning=ms.reasoning
-            )
-        return results
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────

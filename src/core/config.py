@@ -39,10 +39,14 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
     # ── Evaluation ─────────────────────────────────────────────────────────────
-    judge_model: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
+    # Note: le juge LLM est désormais un agent Copilot (@judge-anthropic,
+    # @judge-openai, @judge-google). JUDGE_MODEL n'est plus utilisé.
 
     # Stored as a comma-separated string so pydantic-settings never attempts to
     # JSON-decode it.  Exposed as ``list[str]`` via the computed field below.
+    # ⚠️  Si TARGET_MODELS est défini dans .env, il écrase ce défaut.
+    #     Pour tester avec exactement ces 3 modèles, ne pas définir
+    #     TARGET_MODELS dans .env.
     target_models: str = Field(
         default=(
             "nvidia/nemotron-3-ultra-550b-a55b:free,"
@@ -58,6 +62,7 @@ class Settings(BaseSettings):
         raw = self.target_models.strip()
         if raw.startswith("["):
             import json  # noqa: PLC0415
+
             try:
                 return json.loads(raw)
             except Exception:  # noqa: BLE001
@@ -81,4 +86,3 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Return the cached singleton Settings instance."""
     return Settings()
-

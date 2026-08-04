@@ -18,10 +18,14 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.api.openrouter_client import AsyncOpenRouterClient, OpenRouterClient, OpenRouterError
+from src.api.openrouter_client import (
+    AsyncOpenRouterClient,
+    OpenRouterClient,
+    OpenRouterError,
+)
 from src.core.config import Settings, get_settings
-from src.evaluators.cost_analyzer import AsyncCostAnalyzer, CostAnalyzer, UsageRecord
-from src.evaluators.quality_judge import AsyncQualityJudge, CollectResult, QualityJudge
+from src.evaluators.cost_analyzer import AsyncCostAnalyzer, CostAnalyzer
+from src.evaluators.quality_judge import AsyncQualityJudge, CollectResult
 from src.evaluators.security_scanner import AsyncSecurityScanner, SecurityScanner
 from src.observability.tracker import ExperimentTracker
 
@@ -70,16 +74,13 @@ class Pipeline:
             return pd.DataFrame()
 
     def _run_quality_stage(self, models: list[str]) -> pd.DataFrame:
-        logger.info("[2/3] Running quality evaluation …")
-        if not _QUALITY_PROMPTS.exists():
-            logger.warning("No quality prompts file found at '%s'; skipping.", _QUALITY_PROMPTS)
-            return pd.DataFrame()
-        judge = QualityJudge(self._client, judge_model=self._settings.judge_model)
-        try:
-            return judge.run_dataset(_QUALITY_PROMPTS)
-        except (OpenRouterError, ValueError) as exc:
-            logger.error("Quality stage failed: %s", exc)
-            return pd.DataFrame()
+        # V1 sync pipeline — quality scoring via LLM judge removed.
+        # Use CollectPipeline + a Copilot judge agent + MergePipeline instead.
+        logger.info(
+            "[quality] Skipping — use Copilot judge agents "
+            "(make collect / make judge / make merge)."
+        )
+        return pd.DataFrame()
 
     def _run_security_stage(
         self, models: list[str], pricing_df: pd.DataFrame
@@ -109,9 +110,7 @@ class AsyncPipeline:
         """Execute all stages concurrently and return the merged results DataFrame."""
         models = self._settings.target_models_list
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        logger.info(
-            "Starting async benchmark for %d model(s): %s", len(models), models
-        )
+        logger.info("Starting async benchmark for %d model(s): %s", len(models), models)
 
         self._tracker.start_run(f"benchmark-{timestamp}")
         try:
@@ -132,9 +131,7 @@ class AsyncPipeline:
 
     # ── Private stages ─────────────────────────────────────────────────────────
 
-    async def _run_cost_stage(
-        self, client: AsyncOpenRouterClient
-    ) -> pd.DataFrame:
+    async def _run_cost_stage(self, client: AsyncOpenRouterClient) -> pd.DataFrame:
         logger.info("[cost] Fetching pricing data …")
         analyzer = AsyncCostAnalyzer(client)
         try:
@@ -148,14 +145,19 @@ class AsyncPipeline:
     async def _run_quality_stage(
         self, client: AsyncOpenRouterClient, models: list[str]
     ) -> pd.DataFrame:
-        logger.info("[quality] Running LLM-as-a-Judge evaluation …")
+        logger.info("[quality] Running deterministic evaluation …")
         if not _QUALITY_PROMPTS.exists():
-            logger.warning("[quality] No prompts file found at '%s'; skipping.", _QUALITY_PROMPTS)
+            logger.warning(
+                "[quality] No prompts file found at '%s'; skipping.", _QUALITY_PROMPTS
+            )
             return pd.DataFrame()
-        judge = AsyncQualityJudge(client, judge_model=self._settings.judge_model)
+        judge = AsyncQualityJudge(client)
         try:
             df = await judge.run_dataset(_QUALITY_PROMPTS, models)
-            logger.info("[quality] Evaluation complete — %d scores recorded.", len(df))
+            logger.info(
+                "[quality] Evaluation complete — %d deterministic scores recorded.",
+                len(df),
+            )
             return df
         except (OpenRouterError, ValueError) as exc:
             logger.error("[quality] Stage failed: %s", exc)
@@ -225,14 +227,21 @@ def _merge_results(
 
     if not security_df.empty:
         base = base.merge(
-            security_df[["model", "leak_count", "is_vulnerable", "zero_data_retention"]],
+            security_df[
+                ["model", "leak_count", "is_vulnerable", "zero_data_retention"]
+            ],
             on="model",
             how="left",
         )
 
     if not pricing_df.empty and "model_id" in pricing_df.columns:
         target_pricing = pricing_df[pricing_df["model_id"].isin(models)][
-            ["model_id", "prompt_price_per_token", "completion_price_per_token", "context_length"]
+            [
+                "model_id",
+                "prompt_price_per_token",
+                "completion_price_per_token",
+                "context_length",
+            ]
         ].rename(columns={"model_id": "model"})
         base = base.merge(target_pricing, on="model", how="left")
 
@@ -257,7 +266,11 @@ def _save_pending(
     security_df: pd.DataFrame,
     collect_result: CollectResult,
 ) -> Path:
-    """Persist intermediate data to ``data/intermediate/pending_{ts}.json``."""
+    """Persist intermediate data to ``data/intermediate/pending_{ts}.json``.
+
+    Also writes a **blind** ``judging_{ts}.json`` without ``alias_map`` so
+    Copilot judge agents cannot identify which company made each response.
+    """
     _INTERMEDIATE_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = _INTERMEDIATE_DIR / f"pending_{timestamp}.json"
@@ -266,18 +279,42 @@ def _save_pending(
         "timestamp": timestamp,
         "models": models,
         "pricing": pricing_df.to_dict(orient="records") if not pricing_df.empty else [],
-        "security": security_df.to_dict(orient="records") if not security_df.empty else [],
+        "security": security_df.to_dict(orient="records")
+        if not security_df.empty
+        else [],
         "deterministic_scores": collect_result.deterministic_rows,
         "pending_judgments": collect_result.pending_judgments,
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
     logger.info("Intermediate file saved → '%s'", path)
+
+    # ── Blind judging file (no alias_map) ──────────────────────────────────────
+    judging_path = _INTERMEDIATE_DIR / f"judging_{timestamp}.json"
+    judging_payload = {
+        "timestamp": timestamp,
+        "pending_judgments": [
+            {
+                "prompt_id": pj["prompt_id"],
+                "prompt": pj["prompt"],
+                "prompt_preview": pj.get("prompt_preview", ""),
+                "category": pj.get("category"),
+                "responses": pj["responses"],
+                # alias_map intentionally omitted — blind evaluation
+            }
+            for pj in collect_result.pending_judgments
+        ],
+    }
+    judging_path.write_text(json.dumps(judging_payload, indent=2, ensure_ascii=False))
+    logger.info("Blind judging file saved → '%s'", judging_path)
+
     return path
 
 
 def _latest_file(directory: Path, pattern: str) -> Path | None:
     """Return the most recently modified file matching *pattern* in *directory*."""
-    files = sorted(directory.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(
+        directory.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True
+    )
     return files[0] if files else None
 
 
@@ -317,9 +354,7 @@ class CollectPipeline:
         logger.info("Deterministic scores: %d  |  Pending judgments: %d", n_det, n_pend)
 
         if n_pend > 0:
-            logger.info(
-                "Next: run judge-benchmark prompt in Copilot, then: make merge"
-            )
+            logger.info("Next: run judge-benchmark prompt in Copilot, then: make merge")
         else:
             logger.info("All scores are deterministic — run: make merge")
 
@@ -345,7 +380,9 @@ class CollectPipeline:
             else None
         )
         try:
-            df = await AsyncSecurityScanner(client, probes_path=probes_path).run_full_scan(models)
+            df = await AsyncSecurityScanner(
+                client, probes_path=probes_path
+            ).run_full_scan(models)
             logger.info("[security] Scan complete — %d models scanned.", len(df))
             return df
         except OpenRouterError as exc:
@@ -357,9 +394,11 @@ class CollectPipeline:
     ) -> CollectResult:
         logger.info("[quality] Collecting responses (no LLM judge) …")
         if not _QUALITY_PROMPTS.exists():
-            logger.warning("[quality] No prompts file at '%s'; skipping.", _QUALITY_PROMPTS)
+            logger.warning(
+                "[quality] No prompts file at '%s'; skipping.", _QUALITY_PROMPTS
+            )
             return CollectResult()
-        judge = AsyncQualityJudge(client, judge_model=self._settings.judge_model)
+        judge = AsyncQualityJudge(client)
         try:
             result = await judge.run_collect(_QUALITY_PROMPTS, models)
             logger.info(
@@ -427,51 +466,115 @@ class MergePipeline:
     def _rebuild_quality_df(
         self, pending: dict[str, object], scores_path: Path | None
     ) -> pd.DataFrame:
-        """Combine deterministic rows + Copilot scores into a quality DataFrame."""
+        """Combine deterministic rows + Copilot judge scores into a quality DataFrame.
+
+        Loads ALL ``scores_*_{judge}.json`` files whose internal ``timestamp``
+        matches the pending file.  Scores from different judges are averaged per
+        ``(prompt_id, model)``; recused models (absent from a judge's file) are
+        simply excluded from that judge's contribution to the average.
+        """
         rows: list[dict[str, object]] = list(pending.get("deterministic_scores", []))  # type: ignore[arg-type]
-        pending_judgments: list[dict[str, object]] = pending.get("pending_judgments", [])  # type: ignore[assignment]
+        pending_judgments: list[dict[str, object]] = pending.get(
+            "pending_judgments", []
+        )  # type: ignore[assignment]
+        timestamp: str = str(pending.get("timestamp", ""))
 
         if pending_judgments:
-            if scores_path is None:
-                scores_path = _latest_file(_INTERMEDIATE_DIR, "scores_*.json")
+            # Collect all scores files for this run (multi-judge support).
+            # Priority order: explicit path > all files matching the run timestamp.
+            scores_files: list[Path] = []
+            if scores_path is not None:
+                scores_files = [scores_path]
+            else:
+                # Load every scores_*.json whose internal timestamp matches.
+                for sf in sorted(_INTERMEDIATE_DIR.glob("scores_*.json")):
+                    try:
+                        data = json.loads(sf.read_text())
+                        if data.get("timestamp") == timestamp:
+                            scores_files.append(sf)
+                    except Exception:  # noqa: BLE001
+                        pass
+                # Backward compat: also check the legacy single-file pattern.
+                if not scores_files:
+                    legacy = _latest_file(_INTERMEDIATE_DIR, "scores_*.json")
+                    if legacy:
+                        scores_files = [legacy]
 
-            if scores_path is None:
+            if not scores_files:
                 logger.warning(
-                    "No scores_*.json found — pending judgments will be skipped. "
-                    "Run the judge-benchmark prompt in Copilot first."
+                    "No scores files found for timestamp '%s' — pending "
+                    "judgments skipped. Run a Copilot judge agent "
+                    "(@judge-anthropic / @judge-openai / @judge-google).",
+                    timestamp,
                 )
             else:
-                logger.info("Loading Copilot scores from '%s'", scores_path)
-                scores_data = json.loads(scores_path.read_text())
+                logger.info(
+                    "Loading scores from %d file(s): %s",
+                    len(scores_files),
+                    [sf.name for sf in scores_files],
+                )
 
-                # Build lookup: prompt_id → {alias: judgment_dict}
-                scores_lookup: dict[int, dict[str, dict[str, object]]] = {}
-                for item in scores_data.get("scores", []):
-                    pid = int(item["prompt_id"])
-                    scores_lookup[pid] = {j["alias"]: j for j in item.get("judgments", [])}
+                # Accumulate scores per (prompt_id, model_id) across all judges.
+                # Recused models are simply absent from a judge's file.
+                score_pool: dict[tuple[int, str], list[int]] = {}
+                reasoning_pool: dict[tuple[int, str], list[str]] = {}
+                source_pool: dict[tuple[int, str], list[str]] = {}
+                prompt_preview_map: dict[int, str] = {
+                    int(str(pj["prompt_id"])): str(pj.get("prompt_preview", ""))
+                    for pj in pending_judgments
+                }
+                alias_maps: dict[int, dict[str, str]] = {
+                    int(str(pj["prompt_id"])): pj["alias_map"]  # type: ignore[misc]
+                    for pj in pending_judgments
+                }
 
-                for pj in pending_judgments:
-                    pid = int(str(pj["prompt_id"]))
-                    alias_map: dict[str, str] = pj["alias_map"]  # type: ignore[assignment]
-                    judgments = scores_lookup.get(pid, {})
+                for sf in scores_files:
+                    scores_data = json.loads(sf.read_text())
+                    judge_name: str = str(scores_data.get("judge", sf.stem))
+                    for item in scores_data.get("scores", []):
+                        pid = int(item["prompt_id"])
+                        alias_map = alias_maps.get(pid, {})
+                        for j in item.get("judgments", []):
+                            alias: str = j["alias"]
+                            model_id = alias_map.get(alias)
+                            if model_id is None:
+                                logger.warning(
+                                    "Unknown alias '%s' in '%s'; skipping.",
+                                    alias,
+                                    sf.name,
+                                )
+                                continue
+                            key = (pid, model_id)
+                            score_pool.setdefault(key, []).append(int(str(j["score"])))
+                            reasoning_pool.setdefault(key, []).append(
+                                str(j.get("reasoning", ""))
+                            )
+                            source_pool.setdefault(key, []).append(judge_name)
 
-                    for alias, judgment in judgments.items():
-                        model_id = alias_map.get(alias)
-                        if model_id is None:
-                            logger.warning("Unknown alias '%s' in scores file; skipping.", alias)
-                            continue
-                        rows.append({
+                # Build averaged rows.
+                for (pid, model_id), scores in score_pool.items():
+                    avg = round(sum(scores) / len(scores), 2)
+                    sources = source_pool[(pid, model_id)]
+                    reasonings = reasoning_pool[(pid, model_id)]
+                    rows.append(
+                        {
                             "prompt_id": pid,
-                            "prompt_preview": pj.get("prompt_preview", ""),
+                            "prompt_preview": prompt_preview_map.get(pid, ""),
                             "model": model_id,
-                            "score": int(str(judgment["score"])),
-                            "reasoning": str(judgment.get("reasoning", "")),
-                            "source": "copilot",
-                        })
+                            "score": avg,
+                            "reasoning": " | ".join(
+                                f"[{s}] {r[:120]}"
+                                for s, r in zip(sources, reasonings, strict=False)
+                            ),
+                            "source": f"copilot-avg({len(scores)})",
+                        }
+                    )
 
         df = pd.DataFrame(rows)
         return (
-            df.sort_values(["prompt_id", "score"], ascending=[True, False]).reset_index(drop=True)
+            df.sort_values(["prompt_id", "score"], ascending=[True, False]).reset_index(
+                drop=True
+            )
             if not df.empty
             else df
         )
@@ -498,18 +601,21 @@ class MergePipeline:
                 )
 
 
-
+def main() -> None:
     try:
-        subcommand = sys.argv[1] if len(sys.argv) > 1 else "run"
-        if subcommand == "collect":
+        subcommand = sys.argv[1] if len(sys.argv) > 1 else "collect"
+        if subcommand in ("run", "collect"):
             pending = asyncio.run(CollectPipeline().run())
             logger.info("Pending file: %s", pending)
         elif subcommand == "merge":
             result = MergePipeline().run()
             print(result.to_string(index=False))
         else:
-            result = asyncio.run(AsyncPipeline().run())
-            print(result.to_string(index=False))
+            logger.error(
+                "Unknown subcommand '%s'. Usage: python -m src.main [collect|merge]",
+                subcommand,
+            )
+            sys.exit(1)
     except Exception as exc:
         logger.critical("Pipeline failed: %s", exc, exc_info=True)
         sys.exit(1)
@@ -517,4 +623,3 @@ class MergePipeline:
 
 if __name__ == "__main__":
     main()
-

@@ -28,21 +28,28 @@ type-check: ## Run type checkers
 	mypy src/
 	npm run type-check
 
-run: ## Full pipeline (Python + OpenRouter judge)
-	env -u TARGET_MODELS -u JUDGE_MODEL -u MLFLOW_TRACKING_URI -u MAX_CONCURRENT_REQUESTS python -m src.main
-
-collect: ## Phase 1 — collect responses + deterministic eval + security (no LLM judge)
-	env -u TARGET_MODELS -u JUDGE_MODEL -u MLFLOW_TRACKING_URI -u MAX_CONCURRENT_REQUESTS python -m src.main collect
-
-judge: ## Phase 2 info — open judge-benchmark prompt in Copilot agent mode
-	@echo "In VS Code Copilot chat, run:"
-	@echo "  #prompt:judge-benchmark"
+run: ## Phase 1 — collecte réponses + éval déterministe + sécurité (alias de collect)
+	python -m src.main collect
 	@echo ""
-	@echo "Latest pending file:"
-	@ls data/intermediate/pending_*.json 2>/dev/null | tail -1 || echo "  (none — run make collect first)"
+	@echo "Étape suivante — Phase 2 : dans Copilot chat, invoquer :"
+	@echo "  @judge-coordinator   (lance les 3 juges en parallèle automatiquement)"
+	@echo "Puis Phase 3 : make merge"
+
+collect: ## Phase 1 — collect responses + deterministic eval + security (lit TARGET_MODELS depuis .env)
+	python -m src.main collect
+
+judge: ## Phase 2 — ouvrir un agent juge Copilot (choisir parmi les 3 providers)
+	@echo "Option A — coordinateur (recommandé) : lance les 3 juges automatiquement"
+	@echo "  @judge-coordinator"
+	@echo ""
+	@echo "Option B — juges indépendants (lancer les 3 en parallèle) :"
+	@echo "  @judge-anthropic  (Claude)  |  @judge-openai  (GPT-4o)  |  @judge-google  (Gemini)"
+	@echo ""
+	@echo "Fichier judging en attente :"
+	@ls data/intermediate/judging_*.json 2>/dev/null | tail -1 || echo "  (aucun — lancer make collect d'abord)"
 
 merge: ## Phase 3 — merge Copilot scores + export final results
-	env -u TARGET_MODELS -u JUDGE_MODEL -u MLFLOW_TRACKING_URI -u MAX_CONCURRENT_REQUESTS python -m src.main merge
+	python -m src.main merge
 
 dashboard: ## Launch the Streamlit dashboard
 	streamlit run dashboard/app.py

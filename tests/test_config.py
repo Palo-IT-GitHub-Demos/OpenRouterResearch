@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from src.core.config import Settings, get_settings
 
 
 class TestSettingsValidation:
-    def test_parses_comma_separated_target_models(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_parses_comma_separated_target_models(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("TARGET_MODELS", raising=False)
         s = Settings(
             openrouter_api_key="sk-test",  # type: ignore[arg-type]
@@ -16,7 +19,9 @@ class TestSettingsValidation:
         )
         assert s.target_models_list == ["model-a", "model-b", "model-c"]
 
-    def test_accepts_json_array_target_models(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_accepts_json_array_target_models(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("TARGET_MODELS", raising=False)
         s = Settings(
             openrouter_api_key="sk-test",  # type: ignore[arg-type]
@@ -34,17 +39,9 @@ class TestSettingsValidation:
         assert all(":free" in m for m in s.target_models_list)
         get_settings.cache_clear()
 
-    def test_default_judge_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("JUDGE_MODEL", raising=False)
-        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
-        get_settings.cache_clear()
-        s = get_settings()
-        assert s.judge_model == "nvidia/nemotron-3-ultra-550b-a55b:free"
-        get_settings.cache_clear()
-
     def test_missing_api_key_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             Settings(_env_file=None)  # type: ignore[call-arg]
 
 

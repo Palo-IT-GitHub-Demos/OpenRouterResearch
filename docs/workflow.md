@@ -36,24 +36,24 @@ configuration à la visualisation des résultats.
 
 **Fichier :** [src/core/config.py](../src/core/config.py)
 
-La configuration est chargée depuis `.env` via `pydantic-settings`. Les variables
-d'environnement système ont la priorité sur `.env` — d'où le `env -u` dans
-`make run`.
+La configuration est chargée depuis `.env` via `pydantic-settings`.
 
 | Variable | Rôle |
 |---|---|
 | `OPENROUTER_API_KEY` | Clé API OpenRouter (obligatoire) |
 | `TARGET_MODELS` | Modèles à benchmarker (virgule-séparés) |
-| `JUDGE_MODEL` | Modèle utilisé comme juge LLM-as-a-Judge |
 | `MAX_CONCURRENT_REQUESTS` | `asyncio.Semaphore` — 3 pour le free tier |
 | `MLFLOW_TRACKING_URI` | `sqlite:///mlruns.db` (local par défaut) |
 | `SECURITY_PROBES_PATH` | Chemin vers un fichier de sondes custom (optionnel) |
 
+> **Note :** `JUDGE_MODEL` n'existe plus. Le jugement qualité est assuré par
+> 3 agents GitHub Copilot (`@judge-anthropic`, `@judge-openai`, `@judge-google`)
+> — aucun modèle OpenRouter n'est appelé pour juger, zéro coût API additionnel.
+
 ```bash
-# Lancer proprement (ignore les overrides shell)
-make run
-# Équivalent :
-env -u TARGET_MODELS -u JUDGE_MODEL -u MLFLOW_TRACKING_URI python -m src.main
+make collect   # Phase 1 — collecte + déterministe + sécurité
+# Puis dans Copilot chat : @judge-coordinator (Phase 2)
+make merge     # Phase 3 — fusion + export
 ```
 
 ---
@@ -105,36 +105,50 @@ le coût de chaque modèle benchmark.
 
 ---
 
-## 4. Stage Qualité (`AsyncQualityJudge`)
+## 4. Stage Qualité — collecte + jugement aveugle par agents Copilot
 
 **Fichier :** [src/evaluators/quality_judge.py](../src/evaluators/quality_judge.py)
 
 **Input :** `data/prompts/quality_prompts.json` + liste des modèles cibles
-**Output :** `pd.DataFrame` avec colonnes `prompt_id`, `model`, `score` (1-5),
-`reasoning`
+**Output Phase 1 :** `data/intermediate/pending_{ts}.json` (complet, avec
+`alias_map`) + `data/intermediate/judging_{ts}.json` (aveugle, sans `alias_map`)
 
-### Étapes
+### Phase 1 — `make collect` (Python, aucun appel LLM juge)
 
 ```
 Pour chaque prompt dans quality_prompts.json :
   │
-  ├─ 1. Collect responses (asyncio.gather)
-  │      ┌─ model-A → réponse A
-  │      ├─ model-B → réponse B
-  │      └─ model-C → réponse C
+  ├─ 1. Collect responses (asyncio.gather) pour tous les modèles cibles
   │
-  ├─ 2. Deterministic pre-eval (si category connue)
-  │      ├─ "json_output"        → json.loads() → score 5 ou 1, NO LLM call
-  │      ├─ "code_generation"    → compile()    → score 5 ou 1, NO LLM call
-  │      └─ "instruction_following" → undecidable → forward au juge
-  │
-  └─ 3. LLM-as-a-Judge (si réponses undecidable)
-         ├─ Shuffle des alias (A, B, C) → anti-position bias
-         ├─ Prompt CoT : "3-5 sentences de raisonnement AVANT le score"
-         ├─ Rubrique anti-verbosity : "ne pas favoriser les réponses longues"
-         ├─ Output JSON validé par Pydantic : {model_alias, reasoning, score}
-         └─ Remap alias → model_id
+  └─ 2. Deterministic pre-eval (si category connue)
+         ├─ "json_output"        → json.loads() → score 5 ou 1, déterministe
+         ├─ "code_generation"    → compile()    → score 5 ou 1, déterministe
+         └─ "logical_reasoning" / "instruction_following"
+                → undecidable → alias anonymes (A, B, C…) → pending_judgments
 ```
+
+Les réponses indécidables sont écrites dans **deux** fichiers :
+- `pending_{ts}.json` — contient `alias_map` (alias → model_id), utilisé
+  uniquement par `MergePipeline` en Phase 3
+- `judging_{ts}.json` — **sans** `alias_map`, c'est le seul fichier lu par
+  les agents juges. Ils ne peuvent physiquement pas savoir quel alias
+  correspond à quel modèle/provider.
+
+### Phase 2 — `@judge-coordinator` (Copilot chat, aucun coût API OpenRouter)
+
+Le coordinateur invoque **en parallèle** (même tour, 3 appels `runSubagent`) :
+
+| Agent | Modèle | Sortie |
+|---|---|---|
+| `@judge-anthropic` | Claude Sonnet 4.5 | `scores_{ts}_anthropic.json` |
+| `@judge-openai` | GPT-4o | `scores_{ts}_openai.json` |
+| `@judge-google` | Gemini 2.5 Pro | `scores_{ts}_google.json` |
+
+Chaque agent :
+- Lit `judging_{ts}.json` (alias uniquement, pas d'ID modèle)
+- Applique la rubrique anti-biais : pas de favoritisme verbosité/position
+- Exige un raisonnement Chain-of-Thought (3-5 phrases) avant le score
+- Évalue **tous** les modèles — évaluation en aveugle, pas de récusation nécessaire
 
 ### Fichier de prompts
 
@@ -150,8 +164,9 @@ Pour chaque prompt dans quality_prompts.json :
 ### Économie de coût
 
 Si un prompt a `category = "json_output"` et que la réponse parse correctement
-avec `json.loads()`, **le juge LLM n'est pas appelé** — économie directe d'une
-requête API par modèle par prompt.
+avec `json.loads()`, **aucun juge n'est appelé** — zéro coût, déterministe.
+Pour les prompts indécidables, le jugement passe par les agents Copilot
+(inclus dans la licence, aucun appel API OpenRouter supplémentaire).
 
 ---
 
@@ -200,13 +215,19 @@ social engineering. Activer via `SECURITY_PROBES_PATH=data/prompts/extended_prob
 
 ## 6. Fusion et export
 
-**Fichier :** [src/main.py](../src/main.py)
+**Fichier :** [src/main.py](../src/main.py) — `MergePipeline`
 
-Les 3 DataFrames sont mergés sur la colonne `model` :
+1. Charge `pending_{ts}.json` (avec `alias_map`) pour retrouver le modèle
+   derrière chaque alias
+2. Charge **tous** les `scores_{ts}_*.json` correspondant au même timestamp
+   (un par juge : anthropic / openai / google)
+3. Pour chaque `(prompt_id, model_id)`, moyenne les scores des juges qui ont
+   évalué cette réponse (colonne `source` = `copilot-avg(3)` par ex.)
+4. Fusionne avec pricing + sécurité :
 
 ```
 base_df (model list)
-  LEFT JOIN avg_quality_scores  ON model
+  LEFT JOIN avg_quality_scores  ON model   (moyenne multi-juges)
   LEFT JOIN security_results    ON model
   LEFT JOIN pricing             ON model_id
 → results/benchmark_YYYYMMDD_HHMMSS.{csv,json}
@@ -264,9 +285,10 @@ make dashboard
 Causes possibles :
 - **Rate limit** : le modèle a retourné une réponse vide (comptée comme score 1)
 - **Modèle peu capable** : mauvaise instruction-following
-- **Juge biaisé** : le judge model lui-même peut être rate-limité
+- **Désaccord entre juges** : un score bas peut refléter la moyenne de 3 juges
+  discordants — consulter le champ `reasoning` (concaténé par juge) pour comprendre
 
-→ Recommandation : relancer `make run` à une heure creuse pour les modèles
+→ Recommandation : relancer `make collect` à une heure creuse pour les modèles
 avec score ≤ 2.
 
 ### `is_vulnerable = True`
@@ -291,11 +313,13 @@ données personnelles ou confidentielles (RGPD).
 ## 10. Commandes de référence
 
 ```bash
-# Benchmark complet
-make run
+# Pipeline complet
+make collect                    # Phase 1
+# Puis dans Copilot chat : @judge-coordinator   (Phase 2)
+make merge                      # Phase 3
 
 # Benchmark avec sondes avancées
-SECURITY_PROBES_PATH=data/prompts/extended_probes.json make run
+SECURITY_PROBES_PATH=data/prompts/extended_probes.json make collect
 
 # Dashboard
 make dashboard

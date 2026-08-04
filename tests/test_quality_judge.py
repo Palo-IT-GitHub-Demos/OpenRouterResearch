@@ -44,13 +44,16 @@ def async_mock_client() -> MagicMock:
 
 @pytest.fixture()
 def async_judge(async_mock_client: MagicMock) -> AsyncQualityJudge:
-    return AsyncQualityJudge(async_mock_client, judge_model="openai/gpt-4o")
+    return AsyncQualityJudge(async_mock_client)
 
 
 # ── Sync judge tests ───────────────────────────────────────────────────────────
 
+
 class TestEvaluate:
-    def test_returns_scores_for_all_models(self, judge: QualityJudge, mock_client: MagicMock) -> None:
+    def test_returns_scores_for_all_models(
+        self, judge: QualityJudge, mock_client: MagicMock
+    ) -> None:
         responses = {
             "model-a": "Response from A",
             "model-b": "Response from B",
@@ -71,9 +74,7 @@ class TestEvaluate:
         all_scores = {r.score for r in results.values()}
         assert all_scores.issubset({3, 4})
 
-    def test_returns_empty_for_no_responses(
-        self, judge: QualityJudge
-    ) -> None:
+    def test_returns_empty_for_no_responses(self, judge: QualityJudge) -> None:
         assert judge.evaluate(prompt="test", responses={}) == {}
 
     def test_raises_on_malformed_json(
@@ -96,26 +97,19 @@ class TestEvaluate:
 
 # ── Async judge tests ───────────────────────────────────────────────────────────
 
+
 class TestAsyncEvaluate:
-    async def test_returns_scores_via_llm_judge(
+    async def test_returns_empty_for_undecidable_responses(
         self, async_judge: AsyncQualityJudge, async_mock_client: MagicMock
     ) -> None:
-        completion = MagicMock()
-        completion.choices[0].message.content = json.dumps(
-            {
-                "scores": [
-                    {"model_alias": "A", "score": 5, "reasoning": "Perfect response."},
-                    {"model_alias": "B", "score": 3, "reasoning": "Partial match."},
-                ]
-            }
-        )
-        async_mock_client.chat_completion.return_value = completion
-
+        """Undecidable responses (no category) are omitted — judged by
+        Copilot agents."""
         results = await async_judge.evaluate(
             prompt="test",
             responses={"model-a": "great", "model-b": "ok"},
         )
-        assert len(results) == 2
+        async_mock_client.chat_completion.assert_not_called()
+        assert results == {}
 
     async def test_deterministic_check_skips_llm_for_json(
         self, async_judge: AsyncQualityJudge, async_mock_client: MagicMock
@@ -146,28 +140,24 @@ class TestAsyncEvaluate:
         results = await async_judge.evaluate(prompt="test", responses={})
         assert results == {}
 
-    async def test_cot_reasoning_present(
+    async def test_undecidable_not_in_results(
         self, async_judge: AsyncQualityJudge, async_mock_client: MagicMock
     ) -> None:
-        """Judge result reasoning must be non-trivially long (CoT enforced)."""
-        long_reasoning = "This response correctly follows all instructions. The JSON is valid and well-formed."
-        completion = MagicMock()
-        completion.choices[0].message.content = json.dumps(
-            {"scores": [{"model_alias": "A", "score": 4, "reasoning": long_reasoning}]}
-        )
-        async_mock_client.chat_completion.return_value = completion
-
+        """Without a category, responses are undecidable — no LLM call,
+        empty results."""
         results = await async_judge.evaluate(
             prompt="test",
             responses={"model-a": "some answer"},
         )
-        assert len(results["model-a"].reasoning) >= 20
+        async_mock_client.chat_completion.assert_not_called()
+        assert results == {}
 
 
 # ── Alias helper ───────────────────────────────────────────────────────────────────
 
+
 class TestAlias:
-    def test_first_alias_is_A(self) -> None:
+    def test_first_alias_is_a(self) -> None:
         assert _alias(0) == "A"
 
     def test_sequential_aliases(self) -> None:

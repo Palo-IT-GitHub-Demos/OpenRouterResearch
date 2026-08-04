@@ -19,7 +19,7 @@ visualised in a local Streamlit dashboard with a **Pareto frontier** overlay
 
 | Axis | Method | Key metric |
 |---|---|---|
-| **Quality** | LLM-as-a-Judge (Chain-of-Thought) + deterministic pre-checks | Avg score 1–5 per prompt |
+| **Quality** | Deterministic pre-checks + blind LLM-as-a-Judge (3 Copilot agents: Claude, GPT-4o, Gemini) | Avg score 1–5 per prompt |
 | **Cost** | Live pricing from `/api/v1/models` + pandas cost matrix | USD per 1M tokens |
 | **Security** | 15 prompt-injection probes + Zero Data Retention policy check | Leak count / ZDR flag |
 
@@ -36,7 +36,7 @@ src/
 ├── evaluators/
 │   ├── deterministic_eval.py  # JSON / Python syntax checks (no LLM call needed)
 │   ├── cost_analyzer.py       # Pricing fetch + pandas cost matrix
-│   ├── quality_judge.py       # LLM-as-a-Judge (position bias + verbosity bias mitigation)
+│   ├── quality_judge.py       # Deterministic pre-eval + response collection (LLM judging is external)
 │   └── security_scanner.py    # Injection probes + ZDR policy check
 ├── observability/
 │   └── tracker.py             # MLflow experiment tracker
@@ -55,6 +55,12 @@ results/                       # Auto-generated CSV + JSON exports (timestamped)
 docs/
 ├── adr/                       # Architecture Decision Records
 └── plans/                     # Implementation plans
+
+.github/agents/
+├── judge-anthropic.agent.md   # Copilot judge — Claude (blind evaluation)
+├── judge-openai.agent.md      # Copilot judge — GPT-4o (blind evaluation)
+├── judge-google.agent.md      # Copilot judge — Gemini (blind evaluation)
+└── judge-coordinator.agent.md # Invokes all 3 judges in parallel
 ```
 
 ### Key design decisions
@@ -63,8 +69,11 @@ docs/
 - **`asyncio.gather`** across all three evaluation stages — total runtime ≈ slowest model, not sum
 - **`asyncio.Semaphore(10)`** — caps concurrent requests to avoid rate-limit errors
 - **`tenacity.AsyncRetrying`** — exponential back-off on 429 / 5xx, releases semaphore during wait
-- **Deterministic pre-eval** — JSON / Python syntax checked in pure code before calling the judge LLM (saves cost)
-- **Position bias mitigation** — model responses shuffled into anonymous aliases before judge prompt
+- **Deterministic pre-eval** — JSON / Python syntax checked in pure code before calling a judge (saves cost)
+- **Blind judging via Copilot agents** — no OpenRouter LLM-judge call. Undecidable responses are
+  written to a `judging_*.json` file with model identities stripped, then scored by 3 Copilot
+  agents (Claude/GPT-4o/Gemini) running in parallel. Scores are averaged per model — zero extra
+  API cost, no single-provider bias
 - **MLflow** — local `./mlruns` by default, no external service required
 
 ---
@@ -100,9 +109,23 @@ cp .env.example .env
 ### 4. Run the benchmark
 
 ```bash
-python -m src.main
-# Results written to results/benchmark_<timestamp>.{csv,json}
-# MLflow run recorded in ./mlruns/
+make collect
+# Phase 1 — collects responses, runs deterministic checks + security scans.
+# Writes data/intermediate/pending_<ts>.json and judging_<ts>.json
+```
+
+In VS Code Copilot chat, invoke the judge coordinator:
+
+```
+@judge-coordinator
+# Phase 2 — delegates to @judge-anthropic, @judge-openai, @judge-google in parallel.
+# Each judge only sees anonymised aliases (A, B, C…) — blind evaluation.
+```
+
+```bash
+make merge
+# Phase 3 — averages the 3 judges' scores per model, merges pricing + security,
+# exports results/benchmark_<timestamp>.{csv,json}. MLflow run recorded in ./mlruns/
 ```
 
 ### 5. Open the dashboard
@@ -123,10 +146,14 @@ All settings are loaded from environment variables (`.env`).
 | `OPENROUTER_API_KEY` | — | **Required.** OpenRouter API key |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | API base URL |
 | `TARGET_MODELS` | 3 preset models | Comma-separated list of models to benchmark |
-| `JUDGE_MODEL` | `openai/gpt-4o` | Model used as the LLM-as-a-Judge |
-| `MAX_CONCURRENT_REQUESTS` | `10` | `asyncio.Semaphore` cap |
+| `MAX_CONCURRENT_REQUESTS` | `3` | `asyncio.Semaphore` cap (conservative default for free-tier) |
 | `MLFLOW_TRACKING_URI` | `sqlite:///mlruns.db` | MLflow tracking database (SQLite) |
 | `SECURITY_PROBES_PATH` | — | Path to a custom probe JSON file (overrides built-in probes) |
+
+> **Note:** `JUDGE_MODEL` no longer exists. Quality judging for undecidable
+> responses is done by 3 GitHub Copilot agents (`@judge-anthropic`,
+> `@judge-openai`, `@judge-google`), not an OpenRouter model — zero extra
+> API cost.
 
 ---
 
