@@ -10,16 +10,13 @@ Usage:
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Any
 
 from pydantic import Field, SecretStr, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Default free models (no cost, no account required beyond OpenRouter key).
-_DEFAULT_MODELS = (
-    "google/gemma-4-31b-it:free,"
-    "qwen/qwen3-coder:free,"
-    "nvidia/nemotron-3-super-120b-a12b:free"
-)
+_DEFAULT_MODELS = "google/gemma-4-31b-it:free," "qwen/qwen3-coder:free," "nvidia/nemotron-3-super-120b-a12b:free"
 
 
 class Settings(BaseSettings):
@@ -64,7 +61,9 @@ class Settings(BaseSettings):
             import json  # noqa: PLC0415
 
             try:
-                return json.loads(raw)
+                decoded: Any = json.loads(raw)
+                if isinstance(decoded, list) and all(isinstance(item, str) for item in decoded):
+                    return decoded
             except Exception:  # noqa: BLE001
                 pass
         return [m.strip() for m in raw.split(",") if m.strip()]
@@ -85,4 +84,4 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Return the cached singleton Settings instance."""
-    return Settings()
+    return Settings()  # type: ignore[call-arg]

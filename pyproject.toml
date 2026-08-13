@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "open-router-research"
-version = "0.1.0"
+version = "0.2.0"
 description = "Doing researches on openrouter llm evaluation considering Security, Performance and cost"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -33,17 +33,21 @@ packages = ["src"]
 
 [tool.ruff]
 target-version = "py311"
-line-length = 88
+line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 strict = true
 
 [[tool.mypy.overrides]]
 module = ["streamlit.*", "mlflow.*", "plotly.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["pandas", "pandas.*", "numpy", "numpy.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

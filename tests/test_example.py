@@ -2,10 +2,11 @@
 
 Run with: pytest  (or: make test)
 """
+
 from __future__ import annotations
 
-
 # ── Example function to test ───────────────────────────────────────────────────
+
 
 def add(a: int, b: int) -> int:
     """Return the sum of two integers."""
@@ -20,6 +21,7 @@ def divide(a: float, b: float) -> float:
 
 
 # ── Test cases ─────────────────────────────────────────────────────────────────
+
 
 class TestAdd:
     def test_positive_numbers(self) -> None:
@@ -38,5 +40,6 @@ class TestDivide:
 
     def test_division_by_zero_raises(self) -> None:
         import pytest
+
         with pytest.raises(ValueError, match="Division by zero"):
             divide(1.0, 0.0)

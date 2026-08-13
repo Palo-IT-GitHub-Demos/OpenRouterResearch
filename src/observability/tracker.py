@@ -117,9 +117,7 @@ class ExperimentTracker:
             step=prompt_id,
         )
 
-    def log_security_result(
-        self, model: str, leak_count: int, is_vulnerable: bool
-    ) -> None:
+    def log_security_result(self, model: str, leak_count: int, is_vulnerable: bool) -> None:
         if not self._enabled:
             return
         """Log security scan results for one model.
@@ -146,9 +144,7 @@ class ExperimentTracker:
             key: Artifact subdirectory name (e.g. ``"benchmark_results"``).
             df: DataFrame to serialise.
         """
-        with tempfile.NamedTemporaryFile(
-            suffix=".csv", delete=False, mode="w"
-        ) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w") as tmp:
             df.to_csv(tmp, index=False)
             tmp_path = tmp.name
 

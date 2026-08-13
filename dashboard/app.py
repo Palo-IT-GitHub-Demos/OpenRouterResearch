@@ -32,7 +32,7 @@ csv_files = sorted(_RESULTS_DIR.glob("*.csv"), reverse=True)
 if not csv_files:
     st.warning(
         "No benchmark results found in `results/`.  "
-        "Run `python -m src.main` first."
+        "Run `make collect`, then `@judge-coordinator`, then `make merge`."
     )
     st.stop()
 
@@ -77,7 +77,9 @@ _COLOR_MAP = {"Safe": "#2ecc71", "Partial Risk": "#f39c12", "Vulnerable": "#e74c
 
 # ── Pareto frontier ────────────────────────────────────────────────────────────
 
-plot_df = df.dropna(subset=["cost_per_1m_tokens_usd", "avg_quality_score"])
+plot_df = df.dropna(
+    subset=["cost_per_1m_tokens_usd", "avg_quality_score"]
+)
 pareto_df = compute_pareto_front(
     plot_df, cost_col="cost_per_1m_tokens_usd", quality_col="avg_quality_score"
 )
@@ -136,10 +138,17 @@ st.plotly_chart(fig, use_container_width=True)
 # ── Pareto summary ─────────────────────────────────────────────────────────────
 
 if not pareto_df.empty:
-    with st.expander("Pareto-optimal models (best quality/cost trade-off)", expanded=True):
+    with st.expander(
+        "Pareto-optimal models (best quality/cost trade-off)", expanded=True
+    ):
         st.dataframe(
             pareto_df[
-                ["model", "avg_quality_score", "cost_per_1m_tokens_usd", "security_status"]
+                [
+                    "model",
+                    "avg_quality_score",
+                    "cost_per_1m_tokens_usd",
+                    "security_status",
+                ]
             ],
             use_container_width=True,
             hide_index=True,

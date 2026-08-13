@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from dashboard.pareto import compute_pareto_front
 
@@ -44,9 +43,7 @@ class TestComputeParetoFront:
         assert pareto.empty
 
     def test_sorted_by_cost_ascending(self) -> None:
-        df = pd.DataFrame(
-            {"model": ["B", "A"], "cost": [5.0, 1.0], "quality": [5.0, 3.0]}
-        )
+        df = pd.DataFrame({"model": ["B", "A"], "cost": [5.0, 1.0], "quality": [5.0, 3.0]})
         pareto = compute_pareto_front(df, "cost", "quality")
         assert list(pareto["cost"]) == sorted(pareto["cost"])
 

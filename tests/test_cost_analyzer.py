@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pandas as pd
 import pytest
 
 from src.evaluators.cost_analyzer import CostAnalyzer, UsageRecord
@@ -36,9 +35,7 @@ def analyzer(mock_client: MagicMock) -> CostAnalyzer:
 
 
 class TestFetchPricing:
-    def test_returns_dataframe_with_expected_columns(
-        self, analyzer: CostAnalyzer
-    ) -> None:
+    def test_returns_dataframe_with_expected_columns(self, analyzer: CostAnalyzer) -> None:
         df = analyzer.fetch_pricing()
         assert set(df.columns) >= {
             "model_id",
@@ -77,9 +74,7 @@ class TestComputeCostMatrix:
         result = analyzer.compute_cost_matrix([], pricing_df)
         assert result.empty
 
-    def test_aggregates_multiple_calls_for_same_model(
-        self, analyzer: CostAnalyzer
-    ) -> None:
+    def test_aggregates_multiple_calls_for_same_model(self, analyzer: CostAnalyzer) -> None:
         pricing_df = analyzer.fetch_pricing()
         usage = [
             UsageRecord("openai/gpt-4o-mini", 100, 50),

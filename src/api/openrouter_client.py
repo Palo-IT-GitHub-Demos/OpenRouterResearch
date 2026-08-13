@@ -44,7 +44,7 @@ def _is_retryable(exc: BaseException) -> bool:
     """Return True if the exception should trigger a retry."""
     if isinstance(exc, openai.APIStatusError):
         return exc.status_code in _RETRYABLE_STATUS_CODES
-    return isinstance(exc, (openai.APIConnectionError, openai.APITimeoutError))
+    return isinstance(exc, openai.APIConnectionError | openai.APITimeoutError)
 
 
 # ── Synchronous client ─────────────────────────────────────────────────────────
@@ -97,13 +97,9 @@ class OpenRouterClient:
         try:
             return _call()
         except openai.APIStatusError as exc:
-            raise OpenRouterError(
-                f"OpenRouter API error {exc.status_code} for model '{model}': {exc.message}"
-            ) from exc
+            raise OpenRouterError(f"OpenRouter API error {exc.status_code} for model '{model}': {exc.message}") from exc
         except (openai.APIConnectionError, openai.APITimeoutError) as exc:
-            raise OpenRouterError(
-                f"OpenRouter connection/timeout error for model '{model}': {exc}"
-            ) from exc
+            raise OpenRouterError(f"OpenRouter connection/timeout error for model '{model}': {exc}") from exc
 
     def get_models(self) -> list[dict[str, Any]]:
         """Fetch all available models and their metadata from OpenRouter."""
@@ -111,9 +107,7 @@ class OpenRouterClient:
             response = self._http.get("/models")
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise OpenRouterError(
-                f"Failed to fetch models: HTTP {exc.response.status_code}"
-            ) from exc
+            raise OpenRouterError(f"Failed to fetch models: HTTP {exc.response.status_code}") from exc
         except httpx.RequestError as exc:
             raise OpenRouterError(f"Failed to fetch models: {exc}") from exc
 
@@ -191,13 +185,9 @@ class AsyncOpenRouterClient:
                             **kwargs,
                         )
         except openai.APIStatusError as exc:
-            raise OpenRouterError(
-                f"OpenRouter API error {exc.status_code} for model '{model}': {exc.message}"
-            ) from exc
+            raise OpenRouterError(f"OpenRouter API error {exc.status_code} for model '{model}': {exc.message}") from exc
         except (openai.APIConnectionError, openai.APITimeoutError) as exc:
-            raise OpenRouterError(
-                f"OpenRouter connection/timeout error for model '{model}': {exc}"
-            ) from exc
+            raise OpenRouterError(f"OpenRouter connection/timeout error for model '{model}': {exc}") from exc
         # Unreachable — tenacity always either returns or raises.
         raise OpenRouterError(f"Unexpected retry exhaustion for model '{model}'")  # pragma: no cover
 
@@ -211,9 +201,7 @@ class AsyncOpenRouterClient:
             response = await self._http.get("/models")
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise OpenRouterError(
-                f"Failed to fetch models: HTTP {exc.response.status_code}"
-            ) from exc
+            raise OpenRouterError(f"Failed to fetch models: HTTP {exc.response.status_code}") from exc
         except httpx.RequestError as exc:
             raise OpenRouterError(f"Failed to fetch models: {exc}") from exc
 
@@ -230,4 +218,3 @@ class AsyncOpenRouterClient:
 
     async def __aexit__(self, *_: object) -> None:
         await self.aclose()
-

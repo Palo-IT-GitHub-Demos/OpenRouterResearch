@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -24,7 +24,10 @@ def tracker() -> ExperimentTracker:
 
 class TestExperimentTracker:
     def test_start_and_end_run(self, tracker: ExperimentTracker) -> None:
-        with patch("mlflow.start_run") as mock_start, patch("mlflow.end_run") as mock_end:
+        with (
+            patch("mlflow.start_run") as mock_start,
+            patch("mlflow.end_run") as mock_end,
+        ):
             tracker.start_run("my-run")
             assert tracker._active is True
             mock_start.assert_called_once_with(run_name="my-run")
@@ -49,9 +52,7 @@ class TestExperimentTracker:
     def test_log_quality_score(self, tracker: ExperimentTracker) -> None:
         with patch("mlflow.log_metric") as mock_metric:
             tracker.log_quality_score("openai/gpt-4o", prompt_id=2, score=4)
-            mock_metric.assert_called_once_with(
-                "openai.gpt_4o.quality_score", 4.0, step=2
-            )
+            mock_metric.assert_called_once_with("openai.gpt_4o.quality_score", 4.0, step=2)
 
     def test_log_security_result(self, tracker: ExperimentTracker) -> None:
         with patch("mlflow.log_metrics") as mock_metrics:

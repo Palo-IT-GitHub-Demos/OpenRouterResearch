@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -26,9 +25,7 @@ def client(settings: Settings) -> OpenRouterClient:
 
 
 class TestChatCompletion:
-    def test_returns_completion_on_success(
-        self, client: OpenRouterClient
-    ) -> None:
+    def test_returns_completion_on_success(self, client: OpenRouterClient) -> None:
         mock_completion = MagicMock()
         mock_completion.choices[0].message.content = "Hello!"
 
@@ -44,9 +41,7 @@ class TestChatCompletion:
 
         assert result is mock_completion
 
-    def test_raises_open_router_error_on_status_error(
-        self, client: OpenRouterClient
-    ) -> None:
+    def test_raises_open_router_error_on_status_error(self, client: OpenRouterClient) -> None:
         import openai
 
         with patch.object(
@@ -68,9 +63,7 @@ class TestChatCompletion:
 class TestGetModels:
     def test_returns_model_list(self, client: OpenRouterClient) -> None:
         fake_response = MagicMock(spec=httpx.Response)
-        fake_response.json.return_value = {
-            "data": [{"id": "openai/gpt-4o-mini", "name": "GPT-4o mini"}]
-        }
+        fake_response.json.return_value = {"data": [{"id": "openai/gpt-4o-mini", "name": "GPT-4o mini"}]}
         fake_response.raise_for_status = MagicMock()
 
         with patch.object(client._http, "get", return_value=fake_response):
@@ -79,18 +72,14 @@ class TestGetModels:
         assert len(models) == 1
         assert models[0]["id"] == "openai/gpt-4o-mini"
 
-    def test_raises_open_router_error_on_http_error(
-        self, client: OpenRouterClient
-    ) -> None:
+    def test_raises_open_router_error_on_http_error(self, client: OpenRouterClient) -> None:
         mock_response = MagicMock(spec=httpx.Response)
         mock_response.status_code = 401
 
         with patch.object(
             client._http,
             "get",
-            side_effect=httpx.HTTPStatusError(
-                "Unauthorized", request=MagicMock(), response=mock_response
-            ),
+            side_effect=httpx.HTTPStatusError("Unauthorized", request=MagicMock(), response=mock_response),
         ):
             with pytest.raises(OpenRouterError, match="401"):
                 client.get_models()
