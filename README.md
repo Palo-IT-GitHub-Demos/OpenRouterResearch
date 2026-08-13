@@ -21,7 +21,7 @@ visualised in a local Streamlit dashboard with a **Pareto frontier** overlay
 |---|---|---|
 | **Quality** | Deterministic pre-checks + blind LLM-as-a-Judge (3 Copilot agents: Claude, GPT-4o, Gemini) | Avg score 1–5 per prompt |
 | **Cost** | Live pricing from `/api/v1/models` + pandas cost matrix | USD per 1M tokens |
-| **Security** | 15 prompt-injection probes + Zero Data Retention policy check | Leak count / ZDR flag |
+| **Security** | 5 built-in prompt-injection probes (+ optional extended set) + Zero Data Retention policy check | Leak count / ZDR flag |
 
 ---
 
@@ -67,14 +67,14 @@ docs/
 
 - **`openai` SDK** pointed at OpenRouter via `base_url` — native compatibility, no custom HTTP client
 - **`asyncio.gather`** across all three evaluation stages — total runtime ≈ slowest model, not sum
-- **`asyncio.Semaphore(10)`** — caps concurrent requests to avoid rate-limit errors
+- **`asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)`** — defaults to `3` to avoid free-tier rate-limit errors
 - **`tenacity.AsyncRetrying`** — exponential back-off on 429 / 5xx, releases semaphore during wait
 - **Deterministic pre-eval** — JSON / Python syntax checked in pure code before calling a judge (saves cost)
 - **Blind judging via Copilot agents** — no OpenRouter LLM-judge call. Undecidable responses are
   written to a `judging_*.json` file with model identities stripped, then scored by 3 Copilot
   agents (Claude/GPT-4o/Gemini) running in parallel. Scores are averaged per model — zero extra
   API cost, no single-provider bias
-- **MLflow** — local `./mlruns` by default, no external service required
+- **MLflow** — local SQLite tracking (`sqlite:///mlruns.db`) by default, no external service required
 
 ---
 
@@ -183,101 +183,6 @@ Vulnerabilities should be reported privately — see [SECURITY.md](SECURITY.md).
 - API keys are never logged or committed (`.env` is gitignored; `SecretStr` prevents accidental prints)
 - MLflow only logs token counts and model IDs — never prompt content
 - The security scanner probes are for authorised red-team testing only
-
-
-A GitHub template repository pre-configured with GitHub Copilot and Claude Code artifacts, language-specific coding rules, and gen-e2 marketplace plugins ready to install.
-
-## Quick Start
-
-### 1. Create your repo
-
-Click **Use this template** → create your repository → clone it locally.
-
-### 2. Set up the Python environment
-
-```bash
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
-pip install "git+https://github.com/Palo-IT-GitHub-Demos/lab-registry-mcp@v0.2.0"
-```
-
-### 3. Install Node dependencies and hooks
-
-```bash
-npm install
-pre-commit install
-```
-
-### 4. Initialise the project (replaces all placeholders)
-
-Open Copilot chat in agent mode and run:
-
-```
-@workspace /init-project
-```
-
-The prompt will ask for your project name, description, team handle, and security email, then replace all placeholders in one pass.
-
-## What's Included
-
-### AI Artifacts
-
-| File | Tool | Purpose |
-|---|---|---|
-| `AGENTS.md` | All agents | Project-wide instructions (Copilot + Claude Code + others) |
-| `.github/copilot-instructions.md` | Copilot | Repo-wide context injected in every request |
-| `.github/instructions/python.instructions.md` | Copilot | Python rules auto-applied to `**/*.py` |
-| `.github/instructions/typescript.instructions.md` | Copilot | TypeScript rules auto-applied to `**/*.ts`, `**/*.tsx` |
-| `.github/hooks/protect-secrets.json` | Copilot | Blocks writes to `.env`, `secrets.json`, etc. |
-| `.claude/rules/api-design.md` | Claude Code | Python API rules scoped to `**/*.py` |
-| `.claude/rules/typescript.md` | Claude Code | TypeScript rules scoped to `**/*.ts`, `**/*.tsx` |
-| `.claude/hooks/protect-secrets.sh` | Claude Code | Equivalent secrets protection hook |
-| `.mcp.json` | Claude Code | MCP server for gen-e2 lab-registry |
-
-### Prompts (manual invocation)
-
-| Prompt | Purpose |
-|---|---|
-| `init-project` | **First-run** — replaces all placeholders and installs hooks |
-| `setup-plugins` | Re-install or update the 3 gen-e2 plugins |
-| `create-implementation-plan` | Generate a deterministic implementation plan for any task |
-| `review-architecture` | Run an evidence-first architecture review with Mermaid output |
-
-### gen-e2 Plugins (pre-installed)
-
-| Plugin | Version | Skills + Agents |
-|---|---|---|
-| `delivery` | 0.2.3 | Story → implementation → PR — 5 skills + 1 agent |
-| `implementation-plan` | 0.1.0 | Deterministic plans — 1 skill |
-| `architecture-reviewer` | 0.1.0 | Architecture analysis + Mermaid — 4 skills + 1 agent |
-
-## Customising
-
-- **Add a language**: create `.github/instructions/<lang>.instructions.md` + `.claude/rules/<lang>.md` following the same pattern
-- **Add a skill**: drop a `SKILL.md` in `.github/skills/<name>/` (Copilot picks it up automatically)
-- **Add an agent**: create `.github/agents/<name>.agent.md` or `.claude/agents/<name>.md`
-- **Add a plugin**: register it in `.claude/plugins/<name>/plugin.json` and run `setup-plugins`
-
-## Project Structure
-
-```
-.
-├── src/                          # Source code (replace with your stack)
-├── tests/                        # Python tests (pytest)
-│   └── test_example.py
-├── docs/
-│   └── adr/                      # Architecture Decision Records
-│       └── 0001-architecture-initiale.md
-│
-├── AGENTS.md                     # AI instructions — Copilot + Claude Code + others
-├── AI-STANDARDS.md               # Reference: Copilot ↔ Claude Code artefact mapping
-├── CHANGELOG.md
-├── CONTRIBUTING.md
-├── SECURITY.md
-├── Makefile                      # make test / lint / fmt / dev
-├── pyproject.toml                # Python deps + ruff / mypy / pytest config
-├── package.json                  # Node deps + scripts (vitest, eslint, commitlint)
 ├── tsconfig.json                 # TypeScript strict config
 ├── eslint.config.js              # ESLint flat config (ESLint 9+)
 ├── .commitlintrc.json            # Conventional Commits enforcement
