@@ -104,11 +104,7 @@ def _parse_pricing_rows(models: list[dict[str, object]]) -> list[dict[str, objec
             completion_price = 0.0
 
         context_length_raw = m.get("context_length")
-            context_length = (
-                int(context_length_raw)
-                if isinstance(context_length_raw, int | str)
-                else 0
-            )
+        context_length = int(context_length_raw) if isinstance(context_length_raw, int | str) else 0
 
         rows.append(
             {

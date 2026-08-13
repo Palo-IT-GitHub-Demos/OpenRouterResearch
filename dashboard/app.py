@@ -77,12 +77,8 @@ _COLOR_MAP = {"Safe": "#2ecc71", "Partial Risk": "#f39c12", "Vulnerable": "#e74c
 
 # ── Pareto frontier ────────────────────────────────────────────────────────────
 
-plot_df = df.dropna(
-    subset=["cost_per_1m_tokens_usd", "avg_quality_score"]
-)
-pareto_df = compute_pareto_front(
-    plot_df, cost_col="cost_per_1m_tokens_usd", quality_col="avg_quality_score"
-)
+plot_df = df.dropna(subset=["cost_per_1m_tokens_usd", "avg_quality_score"])
+pareto_df = compute_pareto_front(plot_df, cost_col="cost_per_1m_tokens_usd", quality_col="avg_quality_score")
 
 # ── Plotly figure ──────────────────────────────────────────────────────────────
 
@@ -138,9 +134,7 @@ st.plotly_chart(fig, use_container_width=True)
 # ── Pareto summary ─────────────────────────────────────────────────────────────
 
 if not pareto_df.empty:
-    with st.expander(
-        "Pareto-optimal models (best quality/cost trade-off)", expanded=True
-    ):
+    with st.expander("Pareto-optimal models (best quality/cost trade-off)", expanded=True):
         st.dataframe(
             pareto_df[
                 [
