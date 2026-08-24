@@ -1,0 +1,148 @@
+"""Export benchmark results to a gen-e2-eval compatible YAML registry.
+
+Usage
+-----
+    python scripts/export_gen_e2_registry.py \\
+        --results results/benchmark_<ts>.json \\
+        --output  evaluation/candidates/openrouter-security-pricing.yaml \\
+        --profile enterprise_qa
+
+    # Preview without writing
+    python scripts/export_gen_e2_registry.py --results ... --dry-run
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+import yaml  # pyyaml
+
+
+def _load_results(results_path: Path) -> list[dict[str, object]]:
+    with results_path.open() as fh:
+        data = json.load(fh)
+    if isinstance(data, list):
+        return data  # type: ignore[return-value]
+    raise ValueError(f"Expected a JSON array in {results_path}, got {type(data).__name__}")
+
+
+def _build_registry(
+    records: list[dict[str, object]],
+    profile_name: str,
+) -> dict[str, object]:
+    """Convert benchmark records to gen-e2-eval models.yaml format."""
+    import pandas as pd  # noqa: PLC0415
+
+    from src.evaluators.cost_analyzer import BUILTIN_WORKLOAD_PROFILES, compute_tco  # noqa: PLC0415
+
+    profile = BUILTIN_WORKLOAD_PROFILES.get(profile_name)
+    if profile is None:
+        available = list(BUILTIN_WORKLOAD_PROFILES.keys())
+        raise ValueError(f"Unknown profile '{profile_name}'. Available: {available}")
+
+    # Build a minimal pricing DataFrame from the records
+    pricing_rows = [
+        {
+            "model_id": r.get("model", ""),
+            "prompt_price_per_token": float(r.get("prompt_price_per_token") or 0),
+            "completion_price_per_token": float(r.get("completion_price_per_token") or 0),
+        }
+        for r in records
+    ]
+    pricing_df = pd.DataFrame(pricing_rows)
+
+    models = []
+    for r in records:
+        model_id = str(r.get("model", ""))
+        quality_score = r.get("avg_quality_score")
+        rsi = r.get("rsi")
+        tco = compute_tco(model_id, pricing_df, profile)
+
+        # Build OWASP per-category scores from probe_details if available
+        owasp_scores: dict[str, float] = {}
+        probe_details_raw = r.get("probe_details")
+        if probe_details_raw:
+            try:
+                import ast  # noqa: PLC0415
+
+                details = (
+                    json.loads(str(probe_details_raw))
+                    if isinstance(probe_details_raw, str) and probe_details_raw.startswith("[{")
+                    else ast.literal_eval(str(probe_details_raw))
+                )
+                cat_total: dict[str, int] = {}
+                cat_leaked: dict[str, int] = {}
+                for d in details:
+                    cat = d.get("category_id", "LLM00")
+                    cat_total[cat] = cat_total.get(cat, 0) + 1
+                    if d.get("leaked"):
+                        cat_leaked[cat] = cat_leaked.get(cat, 0) + 1
+                owasp_scores = {cat: round(cat_leaked.get(cat, 0) / total, 4) for cat, total in cat_total.items()}
+            except Exception:  # noqa: BLE001
+                pass
+
+        entry: dict[str, object] = {
+            "id": model_id,
+            "provider": "openrouter",
+            "display_name": model_id.split("/")[-1] if "/" in model_id else model_id,
+            "quality_score": round(float(quality_score), 4) if quality_score is not None else None,
+            "rsi": round(float(rsi), 2) if rsi is not None else None,
+            "zdr_policy": bool(r.get("zero_data_retention", False)),
+            "tco_usd_monthly": round(tco, 4) if math.isfinite(tco) else None,
+            "workload_profile": profile_name,
+        }
+        if owasp_scores:
+            entry["owasp_scores"] = owasp_scores
+
+        models.append(entry)
+
+    return {
+        "schema_version": 1,
+        "source": "openrouter-research",
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "workload_profile": profile_name,
+        "models": models,
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Export benchmark results to gen-e2-eval YAML format.")
+    parser.add_argument("--results", required=True, type=Path, help="Path to benchmark JSON file")
+    parser.add_argument("--output", type=Path, default=Path("evaluation/candidates/openrouter-security-pricing.yaml"))
+    parser.add_argument("--profile", default="enterprise_qa", help="Workload profile for TCO calculation")
+    parser.add_argument("--dry-run", action="store_true", help="Print YAML to stdout without writing")
+    args = parser.parse_args(argv)
+
+    if not args.results.exists():
+        print(f"ERROR: results file not found: {args.results}", file=sys.stderr)
+        return 1
+
+    records = _load_results(args.results)
+    registry = _build_registry(records, args.profile)
+
+    yaml_str = yaml.dump(registry, allow_unicode=True, sort_keys=False, default_flow_style=False)
+
+    header = (
+        f"# Generated by OpenRouterResearch — gen-e2-eval compatible\n"
+        f"# Date: {datetime.now(UTC).date()} | Profile: {args.profile}\n"
+        f"# Source: {args.results}\n\n"
+    )
+    output = header + yaml_str
+
+    if args.dry_run:
+        print(output)
+        return 0
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(output, encoding="utf-8")
+    print(f"✅  Exported {len(records)} models to {args.output}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
