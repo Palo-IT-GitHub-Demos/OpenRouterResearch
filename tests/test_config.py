@@ -9,9 +9,7 @@ from src.core.config import Settings, get_settings
 
 
 class TestSettingsValidation:
-    def test_parses_comma_separated_target_models(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_parses_comma_separated_target_models(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("TARGET_MODELS", raising=False)
         s = Settings(
             openrouter_api_key="sk-test",  # type: ignore[arg-type]
@@ -19,9 +17,7 @@ class TestSettingsValidation:
         )
         assert s.target_models_list == ["model-a", "model-b", "model-c"]
 
-    def test_accepts_json_array_target_models(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_accepts_json_array_target_models(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("TARGET_MODELS", raising=False)
         s = Settings(
             openrouter_api_key="sk-test",  # type: ignore[arg-type]
@@ -29,9 +25,7 @@ class TestSettingsValidation:
         )
         assert s.target_models_list == ["model-x", "model-y"]
 
-    def test_default_target_models_are_free(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_default_target_models_are_free(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("TARGET_MODELS", raising=False)
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
         get_settings.cache_clear()
@@ -43,6 +37,28 @@ class TestSettingsValidation:
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         with pytest.raises(ValidationError):
             Settings(_env_file=None)  # type: ignore[call-arg]
+
+    def test_quality_repetitions_must_stay_within_supported_range(self) -> None:
+        with pytest.raises(ValidationError):
+            Settings(openrouter_api_key="sk-test", quality_repetitions=0)  # type: ignore[arg-type]
+        with pytest.raises(ValidationError):
+            Settings(openrouter_api_key="sk-test", quality_repetitions=6)  # type: ignore[arg-type]
+
+    def test_quality_repetitions_accepts_shortlist_stability_runs(self) -> None:
+        settings = Settings(openrouter_api_key="sk-test", quality_repetitions=3)  # type: ignore[arg-type]
+        assert settings.quality_repetitions == 3
+
+    def test_max_quality_collection_error_rate_must_stay_between_zero_and_one(self) -> None:
+        with pytest.raises(ValidationError):
+            Settings(openrouter_api_key="sk-test", max_quality_collection_error_rate=-0.1)  # type: ignore[arg-type]
+        with pytest.raises(ValidationError):
+            Settings(openrouter_api_key="sk-test", max_quality_collection_error_rate=1.1)  # type: ignore[arg-type]
+
+    def test_max_security_probe_error_rate_must_stay_between_zero_and_one(self) -> None:
+        with pytest.raises(ValidationError):
+            Settings(openrouter_api_key="sk-test", max_security_probe_error_rate=-0.1)  # type: ignore[arg-type]
+        with pytest.raises(ValidationError):
+            Settings(openrouter_api_key="sk-test", max_security_probe_error_rate=1.1)  # type: ignore[arg-type]
 
 
 class TestGetSettings:

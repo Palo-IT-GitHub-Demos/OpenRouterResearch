@@ -15,9 +15,6 @@ from typing import Any
 from pydantic import Field, SecretStr, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Default free models (no cost, no account required beyond OpenRouter key).
-_DEFAULT_MODELS = "google/gemma-4-31b-it:free," "qwen/qwen3-coder:free," "nvidia/nemotron-3-super-120b-a12b:free"
-
 
 class Settings(BaseSettings):
     """Application settings resolved from environment variables or a .env file."""
@@ -45,11 +42,7 @@ class Settings(BaseSettings):
     #     Pour tester avec exactement ces 3 modèles, ne pas définir
     #     TARGET_MODELS dans .env.
     target_models: str = Field(
-        default=(
-            "nvidia/nemotron-3-ultra-550b-a55b:free,"
-            "google/gemma-4-31b-it:free,"
-            "meta-llama/llama-3.3-70b-instruct:free"
-        )
+        default=("nvidia/nemotron-3-ultra-550b-a55b:free," "google/gemma-4-31b-it:free," "openai/gpt-oss-20b:free")
     )
 
     @computed_field  # type: ignore[prop-decorator]
@@ -79,6 +72,23 @@ class Settings(BaseSettings):
     # ── Security ───────────────────────────────────────────────────────────────
     # Optional path to a JSON file containing custom security probes.
     security_probes_path: str | None = None
+
+    # ── Quality screen ─────────────────────────────────────────────────────────
+    # Repeat a generic screen prompt to measure score stability. Keep the broad
+    # OpenRouter pre-screen at one run; use 2–5 only for a shortlisted cohort.
+    quality_repetitions: int = Field(default=1, ge=1, le=5)
+
+    # Abort a run when collection transport failures exceed this ratio.
+    max_quality_collection_error_rate: float = Field(default=0.15, ge=0.0, le=1.0)
+
+    # Abort a run when security probe transport failures exceed this ratio.
+    max_security_probe_error_rate: float = Field(default=0.15, ge=0.0, le=1.0)
+
+    # ── Cost modeling ──────────────────────────────────────────────────────────
+    # Workload profile used for TCO/CER calculations.
+    # Accepted values: "enterprise_qa" | "code_assistant" | "document_analysis"
+    #                  | "chatbot_high_volume"
+    workload_profile: str = "enterprise_qa"
 
 
 @lru_cache(maxsize=1)

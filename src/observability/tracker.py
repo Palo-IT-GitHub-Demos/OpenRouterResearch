@@ -101,7 +101,7 @@ class ExperimentTracker:
             }
         )
 
-    def log_quality_score(self, model: str, prompt_id: int, score: int) -> None:
+    def log_quality_score(self, model: str, prompt_id: int, score: float) -> None:
         if not self._enabled:
             return
         """Log a quality score for one model/prompt pair.
@@ -109,7 +109,7 @@ class ExperimentTracker:
         Args:
             model: Model identifier.
             prompt_id: Zero-based prompt index (used as the MLflow step).
-            score: Quality score from 1 to 5.
+            score: Quality score from 1 to 5, including panel averages.
         """
         mlflow.log_metric(
             f"{_safe_metric_key(model)}.quality_score",
