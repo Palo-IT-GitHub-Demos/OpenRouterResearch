@@ -166,69 +166,56 @@ but both reduce the risk of spending budget on an avoidable configuration error.
 
 Goal: justify a small initial budget request for one developer.
 
-### Step 1: Planning cost range per request
+### Step 1: Real benchmark volume
 
-For this initial request, the relevant volume is the benchmark itself, not a
-monthly `enterprise_qa` workload. The price range below is retained as a
-conservative planning range from the project's live-pricing calculations; the
-final amount will be measured from OpenRouter's `usage.cost` field after each
-run (see [docs/workflow.md](workflow.md), section "Stage Coût").
+For this initial request, the relevant unit is one benchmark run, not a
+monthly `enterprise_qa` workload. The current repository contains 16 quality
+prompts and 5 built-in security probes. The extended OWASP dataset contains 30
+security probes. `QUALITY_REPETITIONS=1` is the default.
 
-- TCO low: 94.62 USD/month
-- TCO high: 437.04 USD/month
-- Benchmark volume: 63 requests per standard run, or 138 requests with the
-  extended OWASP probes
+| Scenario | Quality calls | Security calls | Total calls |
+|---|---:|---:|---:|
+| 1 model, standard | 16 | 5 | 21 |
+| 5 models, standard | 80 | 25 | 105 |
+| 1 model, extended OWASP | 16 | 30 | 46 |
+| 5 models, extended OWASP | 80 | 150 | 230 |
 
-Formula:
+These are planned API calls. Retries can increase the number of network
+requests, while deterministic checks may reduce the number of quality calls
+that need judging. The benchmark's actual OpenRouter cost is recorded from
+`response.usage.cost` after each successful call.
 
-- cost_per_request = monthly_tco / monthly_requests
+### Step 2: Transparent per-run cost hypothesis
 
-Results:
+The exact dollar amount cannot be known before choosing the models and reading
+their live OpenRouter prices. For a planning scenario only, assume an average
+of 512 input tokens and 256 output tokens per call. At an illustrative price
+of 1 USD per million input tokens and 5 USD per million output tokens:
 
-- low: 94.62 / 15,000 = 0.00631 USD/request
-- high: 437.04 / 15,000 = 0.02914 USD/request
+```text
+cost_per_call = (512 x 1 / 1,000,000) + (256 x 5 / 1,000,000)
+               = 0.001792 USD
+```
 
-### Step 2: Cost per full collect run
+| Scenario | Estimated cost at 1 USD / 5 USD per million tokens |
+|---|---:|
+| 1 model, standard: 21 calls | 0.04 USD |
+| 5 models, standard: 105 calls | 0.19 USD |
+| 1 model, extended OWASP: 46 calls | 0.08 USD |
+| 5 models, extended OWASP: 230 calls | 0.41 USD |
 
-Baseline run assumptions:
-
-- quality: 16 prompts x 3 models = 48 requests
-- security baseline: 5 probes x 3 models = 15 requests
-- total baseline run: 63 requests
-
-Formula:
-
-- run_cost_baseline = 63 x cost_per_request
-
-Results:
-
-- low: 0.40 USD/run
-- high: 1.84 USD/run
-
-Security-extended run assumptions:
-
-- quality: 48 requests
-- security OWASP: 30 probes x 3 models = 90 requests
-- total extended run: 138 requests
-
-Formula:
-
-- run_cost_extended = 138 x cost_per_request
-
-Results:
-
-- low: 0.87 USD/run
-- high: 4.02 USD/run
+At a more expensive illustrative price of 3 USD input and 15 USD output per
+million tokens, the same scenarios are approximately 0.11 USD, 0.56 USD,
+0.25 USD, and 1.24 USD respectively. These are planning estimates, not
+observed charges. The real prompts should be token-counted with the selected
+model's tokenizer when a paid model set is chosen.
 
 ### Step 3: Initial 30 USD request justification
 
-With 30 USD, expected capacity is:
-
-- baseline mode: about 16 to 75 runs
-- extended OWASP mode: about 7 to 34 runs
-
-This provides room for several complete validation cycles, retries, and normal
-variation in token usage. The actual cost ledger will be reported after the
+The 30 USD request is a capped development envelope rather than a claim that
+one run costs 30 USD. Based on the five-model planning scenarios above, it
+provides room for repeated standard and extended runs, retries, model changes,
+and token-count variation. The actual cost ledger will be reported after the
 first runs, and any further budget request will be based on measured usage.
 
 ## 8. Management Decision Requested
@@ -239,7 +226,7 @@ first runs, and any further budget request will be based on measured usage.
 
 ## 9. 60-Second Talking Script (Simple English)
 
-"The benchmark pipeline is now working end-to-end, and our engineering quality is strong with all tests passing (186/186 as of 2026-08-24). We can already run quality, security, and cost evaluation in one process. The current limitation is not architecture, it is free-tier rate limits, which reduce evaluation coverage and confidence. To move from technical validation to decision-grade results, we need a dedicated OpenRouter API key. I am requesting an initial budget of 30 USD, based on the actual benchmark volume of 63 requests per standard run or 138 requests with the extended OWASP probes. We will measure the real cost returned by OpenRouter after each run and report the results before requesting any further budget."
+"The benchmark pipeline is now working end-to-end, and our engineering quality is strong with all tests passing (186/186 as of 2026-08-24). We can already run quality, security, and cost evaluation in one process. The current limitation is not architecture, it is free-tier rate limits, which reduce evaluation coverage and confidence. To move from technical validation to decision-grade results, we need a dedicated OpenRouter API key. I am requesting an initial 30 USD development envelope so we can run the benchmark across a growing model set: one standard run uses 21 calls per model, or 105 calls for five models; the extended OWASP run uses 46 calls per model, or 230 calls for five models. We will measure the real cost returned by OpenRouter after each run and report the results before requesting any further budget."
 
 ## 10. Revision Note
 
