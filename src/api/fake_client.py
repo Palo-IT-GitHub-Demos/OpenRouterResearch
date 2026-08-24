@@ -15,6 +15,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.api.openrouter_client import CallCostRecord
 from src.core.config import Settings
 
 # ── Canned responses for the built-in quality-prompt shapes ───────────────────
@@ -24,9 +25,19 @@ from src.core.config import Settings
 # merge) behaves the same way it would with a real model.
 _JSON_SIMPLE = '{"status": "ok", "value": 42}'
 _JSON_TRANSLATE = '{"fr": "bonjour", "es": "hola", "ja": "こんにちは"}'
+_JSON_REGIONS = '["eu", "apac", "us"]'
 _PY_FUNCTION = "def add(a: int, b: int) -> int:\n    return a + b"
 _PRIMES = "2, 3, 5, 7, 11"
 _SYLLOGISM = "YES — by transitivity, since Bloops are Razzles and Razzles are Lazzles, " "all Bloops are Lazzles."
+_SUPPORT_RESPONSE = (
+    "Sorry you are locked out after the reset. Please retry the approved reset link, "
+    "then contact support if access is still blocked. Never share your password."
+)
+_SUMMARY_RESPONSE = (
+    "The release is planned for Tuesday and depends on a completed, validated database migration. "
+    "A validation failure postpones the release."
+)
+_CLARIFYING_QUESTION = "Which audience and decision should the improved report primarily support?"
 _REFUSAL = "I'm sorry, but I can't share my system instructions."
 
 
@@ -39,16 +50,38 @@ def _stable_int(*parts: str) -> int:
 def _fake_prompt_response(prompt: str, model: str) -> str:
     """Return a plausible, deterministic response for a quality-eval prompt."""
     p = prompt.lower()
+    if "json array" in p and "apac" in p:
+        return _JSON_REGIONS
     if "json" in p and ("fr" in p or "translate" in p):
         return _JSON_TRANSLATE
     if "json" in p:
         return _JSON_SIMPLE
     if "python function" in p or "def add" in p:
         return _PY_FUNCTION
+    if "capital of australia" in p:
+        return "Canberra"
+    if "who wrote hamlet" in p:
+        return "William Shakespeare"
+    if "largest planet" in p:
+        return "Jupiter"
+    if "17 multiplied by 23" in p:
+        return "391"
+    if "complete the sequence" in p:
+        return "8"
+    if "sort 12" in p:
+        return "1, 3, 9, 12"
+    if "alpha-42" in p:
+        return "ALPHA-42"
     if "prime numbers" in p:
         return _PRIMES
     if "bloops" in p or "razzles" in p:
-        return _SYLLOGISM
+        return "YES" if "reply only yes or no" in p else _SYLLOGISM
+    if "cannot access my account" in p:
+        return _SUPPORT_RESPONSE
+    if "summarize this text" in p and "database migration" in p:
+        return _SUMMARY_RESPONSE
+    if "make the report better" in p:
+        return _CLARIFYING_QUESTION
     return f"[DRY-RUN] synthetic response from '{model}' — no real API call was made."
 
 
@@ -93,6 +126,12 @@ class FakeAsyncOpenRouterClient:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._call_costs: list[CallCostRecord] = []
+
+    @property
+    def call_costs(self) -> tuple[CallCostRecord, ...]:
+        """Return non-billable dry-run records using the production ledger shape."""
+        return tuple(self._call_costs)
 
     # ── Public API (mirrors AsyncOpenRouterClient) ─────────────────────────────
 
@@ -100,14 +139,30 @@ class FakeAsyncOpenRouterClient:
         self,
         model: str,
         messages: list[dict[str, str]],
+        usage_context: str = "unclassified",
         **kwargs: Any,
     ) -> _FakeChatCompletion:
+        del kwargs
         system_msg = next((m["content"] for m in messages if m.get("role") == "system"), None)
         user_msg = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
         content = (
             _fake_security_response(system_msg, user_msg, model)
             if system_msg is not None
             else _fake_prompt_response(user_msg, model)
+        )
+        self._call_costs.append(
+            CallCostRecord(
+                usage_context=usage_context,
+                requested_model=model,
+                resolved_model=model,
+                generation_id=None,
+                prompt_tokens=None,
+                completion_tokens=None,
+                total_tokens=None,
+                actual_cost_credits=None,
+                cost_source="dry_run",
+                latency_ms=0.0,
+            )
         )
         return _make_completion(content)
 

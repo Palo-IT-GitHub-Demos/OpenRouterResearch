@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from src.api.openrouter_client import OpenRouterClient, OpenRouterError
+from src.api.openrouter_client import AsyncOpenRouterClient, OpenRouterClient, OpenRouterError
 from src.core.config import Settings
 
 
@@ -40,6 +41,56 @@ class TestChatCompletion:
             )
 
         assert result is mock_completion
+
+    def test_records_actual_cost_from_openrouter_usage(self, client: OpenRouterClient) -> None:
+        mock_completion = MagicMock()
+        mock_completion.id = "gen-123"
+        mock_completion.model = "openai/gpt-4o-mini"
+        mock_completion.usage = SimpleNamespace(
+            prompt_tokens=120,
+            completion_tokens=45,
+            total_tokens=165,
+            model_extra={"cost": 0.000321},
+        )
+
+        with patch.object(client._client.chat.completions, "create", return_value=mock_completion):
+            client.chat_completion(
+                model="requested/model",
+                messages=[{"role": "user", "content": "Hi"}],
+                usage_context="quality_screen",
+            )
+
+        assert len(client.call_costs) == 1
+        record = client.call_costs[0]
+        assert record.usage_context == "quality_screen"
+        assert record.requested_model == "requested/model"
+        assert record.resolved_model == "openai/gpt-4o-mini"
+        assert record.generation_id == "gen-123"
+        assert record.prompt_tokens == 120
+        assert record.completion_tokens == 45
+        assert record.actual_cost_credits == pytest.approx(0.000321)
+        assert record.cost_source == "openrouter_usage"
+
+    def test_marks_missing_usage_cost_as_unavailable(self, client: OpenRouterClient) -> None:
+        mock_completion = MagicMock()
+        mock_completion.id = "gen-456"
+        mock_completion.model = "openai/gpt-4o-mini"
+        mock_completion.usage = SimpleNamespace(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            model_extra={},
+        )
+
+        with patch.object(client._client.chat.completions, "create", return_value=mock_completion):
+            client.chat_completion(
+                model="openai/gpt-4o-mini",
+                messages=[{"role": "user", "content": "Hi"}],
+            )
+
+        record = client.call_costs[0]
+        assert record.actual_cost_credits is None
+        assert record.cost_source == "unavailable"
 
     def test_raises_open_router_error_on_status_error(self, client: OpenRouterClient) -> None:
         import openai
@@ -83,3 +134,31 @@ class TestGetModels:
         ):
             with pytest.raises(OpenRouterError, match="401"):
                 client.get_models()
+
+
+class TestAsyncChatCompletion:
+    async def test_records_actual_cost_from_openrouter_usage(self, settings: Settings) -> None:
+        client = AsyncOpenRouterClient(settings)
+        mock_completion = MagicMock()
+        mock_completion.id = "gen-async"
+        mock_completion.model = "openai/gpt-4o-mini"
+        mock_completion.usage = SimpleNamespace(
+            prompt_tokens=90,
+            completion_tokens=12,
+            total_tokens=102,
+            model_extra={"cost": 0.0001},
+        )
+
+        try:
+            with patch.object(client._client.chat.completions, "create", new=AsyncMock(return_value=mock_completion)):
+                await client.chat_completion(
+                    model="openai/gpt-4o-mini",
+                    messages=[{"role": "user", "content": "Hi"}],
+                    usage_context="security_scan",
+                )
+        finally:
+            await client.aclose()
+
+        record = client.call_costs[0]
+        assert record.usage_context == "security_scan"
+        assert record.actual_cost_credits == pytest.approx(0.0001)

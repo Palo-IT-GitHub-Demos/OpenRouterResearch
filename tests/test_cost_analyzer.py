@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
+import math
 from unittest.mock import MagicMock
 
+import pandas as pd
 import pytest
 
-from src.evaluators.cost_analyzer import CostAnalyzer, UsageRecord
+from src.api.openrouter_client import CallCostRecord
+from src.evaluators.cost_analyzer import (
+    BUILTIN_WORKLOAD_PROFILES,
+    CostAnalyzer,
+    UsageRecord,
+    WorkloadProfile,
+    call_costs_to_dataframe,
+    compute_cer,
+    compute_tco,
+    summarize_actual_call_costs,
+)
 
 
 @pytest.fixture()
@@ -84,3 +96,159 @@ class TestComputeCostMatrix:
         row = result[result["model"] == "openai/gpt-4o-mini"].iloc[0]
         assert row["prompt_tokens"] == 300
         assert row["requests"] == 2
+
+
+# ── WorkloadProfile ────────────────────────────────────────────────────────────
+
+
+_PROFILE = WorkloadProfile("test", daily_requests=100, avg_prompt_tokens=500, avg_completion_tokens=250)
+
+
+class TestWorkloadProfile:
+    def test_monthly_prompt_tokens(self) -> None:
+        # 100 req/day × 500 tokens × 22 days = 1_100_000
+        assert _PROFILE.monthly_prompt_tokens == 100 * 500 * 22
+
+    def test_monthly_completion_tokens(self) -> None:
+        assert _PROFILE.monthly_completion_tokens == 100 * 250 * 22
+
+    def test_builtin_profiles_exist(self) -> None:
+        assert "enterprise_qa" in BUILTIN_WORKLOAD_PROFILES
+        assert "code_assistant" in BUILTIN_WORKLOAD_PROFILES
+        assert "document_analysis" in BUILTIN_WORKLOAD_PROFILES
+        assert "chatbot_high_volume" in BUILTIN_WORKLOAD_PROFILES
+
+
+# ── compute_tco ────────────────────────────────────────────────────────────────
+
+
+def _make_pricing_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "model_id": "openai/gpt-4o-mini",
+                "prompt_price_per_token": 0.000001,
+                "completion_price_per_token": 0.000002,
+                "context_length": 128000,
+            }
+        ]
+    )
+
+
+class TestComputeTco:
+    def test_known_price_returns_correct_tco(self) -> None:
+        pricing = _make_pricing_df()
+        profile = WorkloadProfile("t", 100, 500, 250, 22)
+        tco = compute_tco("openai/gpt-4o-mini", pricing, profile)
+        expected = profile.monthly_prompt_tokens * 0.000001 + profile.monthly_completion_tokens * 0.000002
+        assert tco == pytest.approx(expected)
+
+    def test_missing_model_returns_inf(self) -> None:
+        pricing = _make_pricing_df()
+        tco = compute_tco("unknown/model", pricing, _PROFILE)
+        assert math.isinf(tco)
+
+    def test_empty_pricing_returns_inf(self) -> None:
+        tco = compute_tco("any/model", pd.DataFrame(), _PROFILE)
+        assert math.isinf(tco)
+
+
+# ── compute_cer ────────────────────────────────────────────────────────────────
+
+
+class TestComputeCer:
+    def test_zero_tco_returns_zero(self) -> None:
+        assert compute_cer(4.5, 0.0) == 0.0
+
+    def test_inf_tco_returns_zero(self) -> None:
+        assert compute_cer(4.5, float("inf")) == 0.0
+
+    def test_valid_cer_ranking(self) -> None:
+        # Model A: score=4, tco=10 → CER = 0.4
+        # Model B: score=3, tco=15 → CER = 0.2
+        cer_a = compute_cer(4.0, 10.0)
+        cer_b = compute_cer(3.0, 15.0)
+        assert cer_a > cer_b
+
+    def test_positive_score_positive_tco(self) -> None:
+        cer = compute_cer(3.5, 100.0)
+        assert cer > 0.0
+
+
+class TestActualCallCostSummary:
+    def test_distinguishes_real_zero_cost_from_missing_cost(self) -> None:
+        records = (
+            CallCostRecord(
+                usage_context="quality_screen",
+                requested_model="free-model",
+                resolved_model="free-model",
+                generation_id="gen-free",
+                prompt_tokens=10,
+                completion_tokens=4,
+                total_tokens=14,
+                actual_cost_credits=0.0,
+                cost_source="openrouter_usage",
+                latency_ms=120.0,
+            ),
+            CallCostRecord(
+                usage_context="security_scan",
+                requested_model="unknown-cost-model",
+                resolved_model="unknown-cost-model",
+                generation_id="gen-unknown",
+                prompt_tokens=20,
+                completion_tokens=8,
+                total_tokens=28,
+                actual_cost_credits=None,
+                cost_source="unavailable",
+                latency_ms=140.0,
+            ),
+        )
+
+        summary = summarize_actual_call_costs(call_costs_to_dataframe(records))
+        free_row = summary.loc[summary["model"] == "free-model"].iloc[0]
+        unknown_row = summary.loc[summary["model"] == "unknown-cost-model"].iloc[0]
+
+        assert free_row["actual_cost_credits"] == 0.0
+        assert free_row["actual_cost_coverage_rate"] == 1.0
+        assert free_row["actual_cost_missing_call_count"] == 0
+        assert unknown_row["actual_cost_credits"] == 0.0
+        assert unknown_row["actual_cost_coverage_rate"] == 0.0
+        assert unknown_row["actual_cost_missing_call_count"] == 1
+
+    def test_aggregates_call_usage_and_detects_routing_mismatch(self) -> None:
+        records = (
+            CallCostRecord(
+                usage_context="quality_screen",
+                requested_model="requested-model",
+                resolved_model="resolved-model",
+                generation_id="gen-1",
+                prompt_tokens=100,
+                completion_tokens=50,
+                total_tokens=150,
+                actual_cost_credits=0.001,
+                cost_source="openrouter_usage",
+                latency_ms=200.0,
+            ),
+            CallCostRecord(
+                usage_context="security_scan",
+                requested_model="requested-model",
+                resolved_model="requested-model",
+                generation_id="gen-2",
+                prompt_tokens=20,
+                completion_tokens=10,
+                total_tokens=30,
+                actual_cost_credits=0.0002,
+                cost_source="openrouter_usage",
+                latency_ms=50.0,
+            ),
+        )
+
+        row = summarize_actual_call_costs(call_costs_to_dataframe(records)).iloc[0]
+
+        assert row["actual_cost_credits"] == pytest.approx(0.0012)
+        assert row["actual_cost_call_count"] == 2
+        assert row["actual_cost_reported_call_count"] == 2
+        assert row["actual_prompt_tokens"] == 120
+        assert row["actual_completion_tokens"] == 60
+        assert row["actual_latency_ms"] == pytest.approx(250.0)
+        assert row["actual_model_mismatch_call_count"] == 1
