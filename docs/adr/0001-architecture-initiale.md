@@ -1,8 +1,8 @@
 # ADR 0001 — Architecture Initiale du Pipeline d'Évaluation LLM
 
-**Statut :** Accepté  
-**Date :** 2026-07-10  
-**Décideurs :** @enzo.turquet (Palo IT Singapore)  
+**Statut :** Accepté
+**Date :** 2026-07-10
+**Décideurs :** @enzo.turquet (Palo IT Singapore)
 **Ticket :** Initial architecture — open-router-research
 
 ---
@@ -91,46 +91,86 @@ Python syntax) avant d'appeler le modèle juge.
 dans l'écosystème Palo IT. Les logs sont limités aux métriques (tokens, latence,
 coût) — jamais le contenu des prompts (SEC-001).
 
-### D7 — Frontière de Pareto pour le dashboard (V2)
+### D8 — OWASP LLM Top 10 comme cadre de référence sécurité
 
-**Nous avons décidé d'** afficher la frontière de Pareto (Qualité vs Coût) dans le
-dashboard Streamlit.
+**Nous avons décidé d'** structurer les sondes de sécurité selon les 10 catégories
+OWASP LLM Top 10 (2025) plutôt qu'une liste ad hoc de jailbreaks.
 
-**Raison :** Un tableau de chiffres bruts n'aide pas un client à décider. La
-frontière de Pareto identifie visuellement les modèles qui offrent le meilleur
-rapport qualité/prix sans compromis absurde.
+**Raison :** L'OWASP offre un vocabulaire commun et un classement reconnu par
+criticité enterprise. Structurer les sondes par catégorie permet de produire un
+`RobustnessSafetyIndex` pondéré (LLM01 = 25%, LLM02 = 20%, autres = 2–5%)
+et un heatmap lisible par un client non-technique.
 
-**Algorithme :** Tri par coût croissant (qualité décroissante à coût égal), puis
-fenêtre glissante qui garde un point si sa qualité est ≥ au maximum vu jusqu'ici —
-O(n log n), pur pandas.
+### D9 — Suite de qualité versionnée et validée à l'entrée
 
----
+**Nous avons décidé d'** valider le fichier de prompts contre un schéma Pydantic
+(`QualityPrompt`) qui exige des références objectives (réponses acceptées,
+JSON attendu, contrat de fonction) ou des critères de jugement explicites pour
+les prompts ouverts.
 
-## Diagramme d'architecture (V2)
+**Raison :** Un prompt sans contrat objectif et sans critères de jugement produit
+un score non reproductible. Le `quality_suite_id` (hash du fichier) lie chaque
+résultat à une version exacte de la suite pour une comparaison temporelle fiable.
+
+### D10 — Macro-moyenne par dimension pour le score qualité
+
+**Nous avons décidé d'** calculer `avg_quality_score` comme moyenne des scores
+de dimension, et non comme moyenne plate de tous les prompts.
+
+**Raison :** Une dimension avec 10 prompts faciles (JSON) ne doit pas dominer
+une dimension avec 2 prompts de communication complexe. Le macro-average par
+dimension préserve l'équilibre sans imposer des poids arbitraires par prompt.
+
+### D11 — Coût réel par appel via `response.usage.cost`
+
+**Nous avons décidé de** capturer le champ `usage.cost` renvoyé par OpenRouter
+dans chaque complétion et de le persister dans un `CallCostRecord` distinct
+du TCO prévisionnel.
+
+**Raison :** Pour les modèles gratuits, `tco_usd = 0` masque toute information
+de coût. La colonne `actual_cost_credits` avec `actual_cost_coverage_rate`
+permet de distinguer « zéro réel » de « donnée absente », évitant une
+fausse certitude sur le caractère gratuit d'un modèle.
+
+### D12 — CER conditionné à la couverture de la suite qualité
+
+**Nous avons décidé de** ne calculer le CER (qualité/TCO) que si
+`quality_coverage_rate ≥ 0.8` **et** `quality_dimension_coverage_rate = 1.0`.
+
+**Raison :** Un CER calculé sur un score partiel (15 prompts sur 16,
+ou 4 dimensions sur 6) serait comparé incorrectement avec un CER complet.
+Bloquer le CER force à interpréter séparément la qualité et le coût quand
+l'évidence est insuffisante.
 
 ```mermaid
 flowchart TD
-    ENV[.env\nOPENROUTER_API_KEY\nTARGET_MODELS\n...] --> CONFIG[core/config.py\nSettings / get_settings]
+    ENV[.env\nOPENROUTER_API_KEY\nTARGET_MODELS\nQUALITY_REPETITIONS\nWORKLOAD_PROFILE\n...] --> CONFIG[core/config.py\nSettings / get_settings]
 
-    CONFIG --> PIPELINE[main.py\nAsyncPipeline.run]
+    CONFIG --> PIPELINE[main.py\nCollectPipeline.run]
 
     PIPELINE -->|asyncio.gather| COST[cost_analyzer\nAsyncCostAnalyzer]
-    PIPELINE -->|asyncio.gather| QUALITY[quality_judge\nAsyncQualityJudge]
-    PIPELINE -->|asyncio.gather| SECURITY[security_scanner\nAsyncSecurityScanner]
+    PIPELINE -->|asyncio.gather| QUALITY[quality_judge\nAsyncQualityJudge\n16 prompts / 6 dimensions]
+    PIPELINE -->|asyncio.gather| SECURITY[security_scanner\nAsyncSecurityScanner\n30 sondes OWASP]
 
-    COST --> CLIENT[api/openrouter_client\nAsyncOpenRouterClient\nSemaphore + AsyncRetrying]
-    QUALITY --> DET[deterministic_eval\nJsonValidityCheck\nPythonSyntaxCheck]
+    COST --> CLIENT[api/openrouter_client\nAsyncOpenRouterClient\nSemaphore + AsyncRetrying\n+ CallCostLedger]
+    QUALITY --> DET[deterministic_eval\nJsonValidityCheck\nPythonSyntaxCheck\nExactAnswerCheck]
     QUALITY --> CLIENT
     SECURITY --> CLIENT
 
-    CLIENT -->|HTTPS| OR[(OpenRouter API)]
+    CLIENT -->|HTTPS + usage.cost| OR[(OpenRouter API)]
 
-    PIPELINE --> TRACKER[observability/tracker\nExperimentTracker]
+    PIPELINE --> PENDING[data/intermediate/\npending_ts.json\njudging_ts.json]
+    PENDING --> JUDGES[Copilot Agents\njudge-anthropic\njudge-openai\njudge-google]
+    JUDGES --> SCORES[data/intermediate/\nscores_ts_*.json]
+    SCORES --> MERGE[MergePipeline\nPhase 3]
+    PENDING --> MERGE
+
+    MERGE --> TRACKER[observability/tracker\nExperimentTracker]
     TRACKER --> MLFLOW[(./mlruns\nMLflow)]
 
-    PIPELINE --> RESULTS[results/benchmark_*.csv\nresults/benchmark_*.json]
-    RESULTS --> DASH[dashboard/app.py\nStreamlit + Plotly]
-    DASH --> PARETO[dashboard/pareto.py\nfrontière de Pareto]
+    MERGE --> RESULTS[results/benchmark_*.csv\nresults/call_costs/]
+    RESULTS --> DASH[dashboard/app.py\nStreamlit — 4 onglets]
+    RESULTS --> EXPORT[scripts/export_gen_e2_registry.py\nevaluation/candidates/\nopenrouter-security-pricing.yaml]
 ```
 
 ---
@@ -145,6 +185,8 @@ flowchart TD
 | Langfuse | Moins universel que MLflow dans un contexte enterprise Palo IT existant |
 | `concurrent.futures.ThreadPoolExecutor` | `asyncio` natif + meilleure intégration avec le SDK openai async |
 | Score 0 pour les échecs déterministes | Incompatible avec la contrainte Pydantic `ge=1` ; score=1 (pire) utilisé à la place |
+| Moyenne plate des scores qualité | Masque les lacunes par dimension ; macro-moyenne par dimension retenue |
+| CER sur TCO uniquement | Ne distingue pas coût nul réel de coût indisponible ; `actual_cost_credits` ajouté |
 
 ---
 
@@ -153,77 +195,36 @@ flowchart TD
 **Positives :**
 - Runtime du benchmark ≈ modèle le plus lent (pas la somme de tous)
 - Coût réduit grâce à la pré-évaluation déterministe
-- Résultats traçables et comparables dans le temps via MLflow
-- Dashboard décisionnel Pareto prêt à montrer à un client
+- Résultats traçables et comparables dans le temps via MLflow et `quality_suite_id`
+- Dashboard décisionnel prêt à montrer à un client (4 onglets)
+- Export direct vers gen-e2-eval
 
 **Négatives / compromis :**
 - `asyncio` complexifie le débogage (stack traces moins lisibles)
-- MLflow local ne scale pas au-delà de l'utilisation mono-machine sans configuration supplémentaire
-- Le juge LLM reste subjectif malgré les mitigations — marge d'erreur ~10-15%
+- MLflow local ne scale pas au-delà de l'utilisation mono-machine
+- Le juge LLM reste subjectif malgré les mitigations — marge ~10-15%
+- La suite qualité générique ne remplace pas une évaluation métier
 
 **Neutres :**
-- Les évaluateurs sync (V1) sont conservés pour la compatibilité avec les tests unitaires
+- Les évaluateurs sync (V1) sont conservés pour la compatibilité avec les tests
 
 ---
 
 ## Références
 
 - [OpenRouter API docs](https://openrouter.ai/docs)
+- [OpenRouter Usage Accounting](https://openrouter.ai/docs/use-cases/usage-accounting)
 - [tenacity — AsyncRetrying](https://tenacity.readthedocs.io/)
 - [MLflow Tracking](https://mlflow.org/docs/latest/tracking.html)
-- `docs/plans/feature-pipeline-v2-1.md` — plan détaillé de l'implémentation V2
+- [OWASP LLM Top 10 (2025)](https://owasp.org/www-project-top-10-for-large-language-model-applications/) —
+  édition de référence originale pour `owasp_probes.json` et les poids RSI. Le projet OWASP a depuis publié
+  l'[OWASP GenAI LLM Top 10 2026](https://genai.owasp.org/resource/owasp-genai-llm-top-10-2026/)
+  (catégories/rangs canoniques : [GenAI-Security-Project/GenAI-LLM-Top10](https://github.com/GenAI-Security-Project/GenAI-LLM-Top10)) ;
+  `owasp_probes.json` et `_RSI_WEIGHTS` ont été mis à jour vers cette édition le 2026-08-21. Les poids RSI
+  restent une pondération interne (non publiée par OWASP) — méthodologie documentée dans
+  `security_scanner.py`.
 - [LLM-as-a-Judge (Zheng et al., 2023)](https://arxiv.org/abs/2306.05685)
-- [JailbreakBench](https://jailbreakbench.github.io/)
-
-
-**Statut :** Proposé
-**Date :** <!-- YYYY-MM-DD -->
-**Décideurs :** <!-- @team-handle -->
-**Ticket :** <!-- #issue-number -->
-
----
-
-## Contexte
-
-<!--
-Décris le contexte technique et métier qui nécessite cette décision.
-Quelle est la contrainte, le problème, ou l'opportunité ?
-Sois factuel — évite les jugements de valeur ici.
--->
-
-## Décision
-
-<!--
-Quelle est la décision prise ?
-Commence par : "Nous avons décidé de..."
--->
-
-## Conséquences
-
-**Positives :**
-- <!-- bénéfice attendu -->
-
-**Négatives / compromis :**
-- <!-- risque ou dette technique acceptée -->
-
-**Neutres :**
-- <!-- impact sans valeur positive ou négative claire -->
-
----
-
-## Diagramme d'architecture
-
-<!-- Utilise le skill `mermaid-creator` pour générer ou affiner ce diagramme -->
-
-```mermaid
-graph TD
-    A[Client] --> B[API Layer]
-    B --> C[Business Logic]
-    C --> D[Data Layer]
-    D --> E[(Database)]
-```
-
----
+- `docs/plans/feature-security-cost-specialization-1.md` — plan d'implémentation V3
 
 ## Alternatives envisagées
 

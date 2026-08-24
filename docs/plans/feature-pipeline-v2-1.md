@@ -72,13 +72,15 @@ class AsyncOpenRouterClient:
         self._http = httpx.AsyncClient(
             base_url=settings.openrouter_base_url,
             timeout=settings.request_timeout,
-            headers={"Authorization": f"Bearer {settings.openrouter_api_key.get_secret_value()}"},
+            headers={
+                "Authorization": f"Bearer {settings.openrouter_api_key.get_secret_value()}"
+            },
         )
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_requests)
 
     async def chat_completion(
         self, model: str, messages: list[dict[str, str]], **kwargs: Any
-    ) -> ChatCompletion: ...   # tenacity.AsyncRetrying + semaphore guard
+    ) -> ChatCompletion: ...  # tenacity.AsyncRetrying + semaphore guard
 
     async def get_models(self) -> list[dict[str, Any]]: ...
 
@@ -161,6 +163,7 @@ async with tenacity.AsyncRetrying(
               )
           ...
 
+
   def main() -> None:
       asyncio.run(AsyncPipeline().run())
   ```
@@ -184,6 +187,7 @@ Each check returns a `CheckResult(passed: bool | None, score: int | None, reason
 ```python
 class DeterministicCheck(Protocol):
     category: str
+
     def run(self, prompt: str, response: str) -> CheckResult: ...
 ```
 
@@ -260,7 +264,9 @@ class ExperimentTracker:
 
     def log_quality_score(self, model: str, prompt_id: int, score: int) -> None: ...
 
-    def log_security_result(self, model: str, leak_count: int, is_vulnerable: bool) -> None: ...
+    def log_security_result(
+        self, model: str, leak_count: int, is_vulnerable: bool
+    ) -> None: ...
 
     def log_dataframe(self, key: str, df: pd.DataFrame) -> None:
         """Log DataFrame as MLflow artifact (CSV)."""
