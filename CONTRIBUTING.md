@@ -7,7 +7,7 @@ git clone <repo>
 cd open-router-research
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev,docs]"
 npm install
 pre-commit install
 ```
@@ -18,7 +18,7 @@ benchmark. **Never commit `.env`.**
 ## Branches
 
 | Pattern | Purpose |
-|---|---|
+| --- | --- |
 | `main` | Production-ready, protected |
 | `feat/<short-description>` | New features |
 | `fix/<short-description>` | Bug fixes |
@@ -29,7 +29,7 @@ benchmark. **Never commit `.env`.**
 
 Follow [Conventional Commits](https://www.conventionalcommits.org/):
 
-```
+```text
 feat(evaluators): add async quality judge
 fix(scanner): handle probe timeout gracefully
 chore: bump mlflow to 2.15
@@ -54,7 +54,18 @@ make test          # pytest (76 tests, API calls mocked)
 make lint          # ruff check
 make fmt           # ruff format
 mypy src/ --strict # type-check
+make docs-build    # build the documentation site strictly
 ```
+
+## Documentation
+
+- Put user guides, ADRs, and plans in `docs/` using descriptive headings.
+- Keep docstrings accurate for every public Python class or function; the API
+ reference is generated from them during the MkDocs build.
+- Do not duplicate API signatures in prose. Link to the API reference instead.
+- Run `make docs-build` when changing `docs/`, `src/`, `dashboard/`, or
+ `mkdocs.yml`. The documentation workflow runs this same validation on pull
+ requests and publishes `main` to GitHub Pages.
 
 ## Adding a new evaluator
 

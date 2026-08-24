@@ -17,17 +17,17 @@ visualised in a local Streamlit dashboard with a **Pareto frontier** overlay
 
 ### Evaluation axes
 
-| Axis | Method | Key metric |
-|---|---|---|
-| **Quality** | Deterministic pre-checks + blind LLM-as-a-Judge (3 Copilot agents: Claude, GPT-4o, Gemini) | Avg score 1–5 per prompt |
-| **Cost** | Live pricing from `/api/v1/models` + pandas cost matrix | USD per 1M tokens |
-| **Security** | 5 built-in prompt-injection probes (+ optional extended set) + Zero Data Retention policy check | Leak count / ZDR flag |
+| Axis               | Method                                                                                          | Key metric                                              |
+| ------------------ | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| **Quality**  | Versioned generic screen: deterministic contracts + blind LLM-as-a-Judge for open prompts       | Macro-average 1–5 by dimension, coverage and stability |
+| **Cost**     | Live price projection + OpenRouter`response.usage.cost` ledger                                | TCO monthly + actual credits per call                   |
+| **Security** | 5 built-in prompt-injection probes (+ optional extended set) + Zero Data Retention policy check | Leak count / ZDR flag                                   |
 
 ---
 
 ## Architecture
 
-```
+```text
 src/
 ├── core/
 │   └── config.py              # Pydantic-settings (env vars, target models)
@@ -40,7 +40,7 @@ src/
 │   └── security_scanner.py    # Injection probes + ZDR policy check
 ├── observability/
 │   └── tracker.py             # MLflow experiment tracker
-└── main.py                    # AsyncPipeline orchestrator
+└── main.py                    # CollectPipeline / MergePipeline / DryRunPipeline orchestrators (CLI)
 
 dashboard/
 ├── pareto.py                  # Pareto frontier computation
@@ -74,7 +74,14 @@ docs/
   written to a `judging_*.json` file with model identities stripped, then scored by 3 Copilot
   agents (Claude/GPT-4o/Gemini) running in parallel. Scores are averaged per model — zero extra
   API cost, no single-provider bias
+- **Generic quality screen** — versioned, provider-neutral prompts test structured output, code
+  contracts, factual sanity, elementary reasoning, instruction reliability and concise communication.
+  The aggregate is macro-averaged by dimension; coverage and optional repeat-run stability are exported
+  alongside the score. This is a broad shortlist signal, not a replacement for a use-case evaluation.
 - **MLflow** — local SQLite tracking (`sqlite:///mlruns.db`) by default, no external service required
+- **Actual call-cost ledger** — every successful OpenRouter completion records the provider-returned
+  `usage.cost`, token usage, resolved model, latency and evaluation stage. The raw ledger contains no
+  prompts or responses and is exported under `results/call_costs/`.
 
 ---
 
@@ -92,7 +99,7 @@ git clone <repo>
 cd open-router-research
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
+pip install -e ".[dev,docs]"
 npm install
 pre-commit install
 ```
@@ -116,7 +123,7 @@ make collect
 
 In VS Code Copilot chat, invoke the judge coordinator:
 
-```
+```text
 @judge-coordinator
 # Phase 2 — delegates to @judge-anthropic, @judge-openai, @judge-google in parallel.
 # Each judge only sees anonymised aliases (A, B, C…) — blind evaluation.
@@ -141,28 +148,55 @@ streamlit run dashboard/app.py
 
 All settings are loaded from environment variables (`.env`).
 
-| Variable | Default | Description |
-|---|---|---|
-| `OPENROUTER_API_KEY` | — | **Required.** OpenRouter API key |
-| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | API base URL |
-| `TARGET_MODELS` | 3 preset models | Comma-separated list of models to benchmark |
-| `MAX_CONCURRENT_REQUESTS` | `3` | `asyncio.Semaphore` cap (conservative default for free-tier) |
-| `MLFLOW_TRACKING_URI` | `sqlite:///mlruns.db` | MLflow tracking database (SQLite) |
-| `SECURITY_PROBES_PATH` | — | Path to a custom probe JSON file (overrides built-in probes) |
+| Variable                    | Default                          | Description                                                                             |
+| --------------------------- | -------------------------------- | --------------------------------------------------------------------------------------- |
+| `OPENROUTER_API_KEY`      | —                               | **Required.** OpenRouter API key                                                  |
+| `OPENROUTER_BASE_URL`     | `https://openrouter.ai/api/v1` | API base URL                                                                            |
+| `TARGET_MODELS`           | 3 preset models                  | Comma-separated list of models to benchmark                                             |
+| `MAX_CONCURRENT_REQUESTS` | `3`                            | `asyncio.Semaphore` cap (conservative default for free-tier)                          |
+| `MLFLOW_TRACKING_URI`     | `sqlite:///mlruns.db`          | MLflow tracking database (SQLite)                                                       |
+| `SECURITY_PROBES_PATH`    | —                               | Path to a custom probe JSON file (overrides built-in probes)                            |
+| `QUALITY_REPETITIONS`     | `1`                            | Repeats per generic quality prompt; use`2`–`5` only for shortlist stability checks |
 
 > **Note:** `JUDGE_MODEL` no longer exists. Quality judging for undecidable
 > responses is done by 3 GitHub Copilot agents (`@judge-anthropic`,
 > `@judge-openai`, `@judge-google`), not an OpenRouter model — zero extra
 > API cost.
 
+### Interpreting the quality result
+
+`avg_quality_score` is a **generic pre-selection score**, not a claim that a model is best for a
+specific client workflow. It is macro-averaged across the six quality dimensions so that a large
+number of easy formatting prompts cannot dominate the result. Read it together with:
+
+- `quality_coverage_rate` — fraction of configured prompts successfully scored;
+- `quality_dimension_coverage_rate` — fraction of quality dimensions represented in the score;
+- `quality_stability_score` — repeatability signal when `QUALITY_REPETITIONS >= 2`;
+- `quality_collection_error_count` — API/transport failures, kept separate from model failures.
+
+The cost-efficiency ratio (`cer`) is withheld when the result does not cover the required dimensions.
+Use `gen-e2-eval` after this filter to measure success against a client-specific golden dataset.
+
+### Actual cost versus TCO projection
+
+- `actual_cost_credits` is the amount returned by OpenRouter in `response.usage.cost` for the calls
+  made during the benchmark. `actual_cost_coverage_rate` indicates how many calls supplied this value.
+  A free model is correctly represented by **0 credits with 100% coverage**.
+- `tco_usd` is a forward-looking monthly estimate based on the selected workload profile and the
+  pricing snapshot from `/models`; it is not the charge for the current benchmark run.
+- Calls issued by Copilot judge agents are outside OpenRouter and therefore are not present in the
+  OpenRouter call-cost ledger.
+
 ---
 
 ## Development
 
 ```bash
-pytest --tb=short          # run tests (76 total)
+pytest --tb=short          # run the test suite
 ruff check src/            # lint
 mypy src/ --strict         # type-check
+make docs-build            # validate the documentation site
+make docs-serve            # preview it locally with live reload
 streamlit run dashboard/app.py   # dashboard
 mlflow ui                  # view experiment runs
 ```
@@ -174,6 +208,26 @@ mlflow ui                  # view experiment runs
 - Every new public method must have a docstring
 - Tests live in `tests/` and use `pytest` + `unittest.mock` (no real API calls in CI)
 
+## Documentation
+
+The documentation site is built with MkDocs. Its navigation keeps the operational
+workflow, ADRs, implementation plans, and the Python reference in one place.
+The API reference is rendered directly from the docstrings in `src/` and
+`dashboard/`, so it always reflects the source code at build time.
+
+```bash
+make docs-build  # strict validation of pages, navigation, and API references
+make docs-serve  # local preview at http://127.0.0.1:8000
+```
+
+Pull requests that change documentation or Python sources run the same strict
+build. A push to `main` publishes the resulting site to GitHub Pages. Before the
+first deployment, enable **GitHub Pages → Build and deployment → GitHub Actions**
+in the repository settings.
+
+See [the documentation maintenance guide](docs/documentation.md) for the source
+of truth and the update checklist.
+
 ---
 
 ## Security
@@ -183,70 +237,77 @@ Vulnerabilities should be reported privately — see [SECURITY.md](SECURITY.md).
 - API keys are never logged or committed (`.env` is gitignored; `SecretStr` prevents accidental prints)
 - MLflow only logs token counts and model IDs — never prompt content
 - The security scanner probes are for authorised red-team testing only
-├── tsconfig.json                 # TypeScript strict config
-├── eslint.config.js              # ESLint flat config (ESLint 9+)
-├── .commitlintrc.json            # Conventional Commits enforcement
-├── .editorconfig
-├── .env.example                  # Secret placeholders — copy to .env
-├── .gitignore
-├── .pre-commit-config.yaml       # Git hooks: ruff, secrets scan, yaml/json checks
-├── docker-compose.yml            # Local dev environment
-│
-├── .devcontainer/
-│   ├── devcontainer.json         # VS Code Dev Container (Python 3.11 + Node 20)
-│   └── Dockerfile                # Python + data/AI deps + lab-registry MCP
-│
-├── .github/
-│   ├── copilot-instructions.md   # Repo-wide Copilot context + Conventional Commits rules
-│   ├── CODEOWNERS
-│   ├── PULL_REQUEST_TEMPLATE.md
-│   ├── dependabot.yml
-│   ├── ISSUE_TEMPLATE/
-│   │   ├── bug_report.md
-│   │   └── feature_request.md
-│   ├── workflows/
-│   │   └── ci.yml                # CI: Python (pytest+ruff+mypy) + TypeScript
-│   ├── instructions/             # Coding rules auto-applied by Copilot
-│   │   ├── python.instructions.md
-│   │   └── typescript.instructions.md
-│   ├── prompts/                  # Reusable agent prompts
-│   │   ├── init-project.prompt.md
-│   │   ├── setup-plugins.prompt.md
-│   │   ├── create-implementation-plan.prompt.md
-│   │   └── review-architecture.prompt.md
-│   ├── hooks/
-│   │   └── protect-secrets.json  # Blocks AI writes to .env / secrets
-│   ├── skills/                   # gen-e2 skills (Copilot)
-│   │   ├── commit-push-pr/
-│   │   ├── execute-plan/
-│   │   ├── extract-design/
-│   │   ├── generate-stories/
-│   │   ├── implementation-plan/
-│   │   ├── create-implementation-plan/
-│   │   ├── architecture-review/
-│   │   ├── architecture-review-session/
-│   │   ├── mermaid-creator/
-│   │   └── pdf-to-markdown/
-│   └── agents/                   # gen-e2 agents (Copilot)
-│       ├── figma-extractor.agent.md
-│       └── architecture-review-agent.agent.md
-│
-└── .claude/
-    ├── settings.json             # autoMemory, hooks
-    ├── rules/                    # Coding rules (Claude Code)
-    │   ├── api-design.md
-    │   └── typescript.md
-    ├── hooks/
-    │   └── protect-secrets.sh
-    ├── skills/                   # gen-e2 skills (Claude Code — mirror of .github/skills/)
-    │   └── ...
-    ├── agents/                   # gen-e2 agents (Claude Code)
-    │   ├── figma-extractor.md
-    │   └── architecture-review-agent.md
-    └── plugins/                  # Plugin registry for compliance checks
-        ├── delivery/plugin.json
-        ├── implementation-plan/plugin.json
-        └── architecture-reviewer/plugin.json
+
+---
+
+## Repository Layout
+
+```text
+repo/
+  ├── tsconfig.json                 # TypeScript strict config
+  ├── eslint.config.js              # ESLint flat config (ESLint 9+)
+  ├── .commitlintrc.json            # Conventional Commits enforcement
+  ├── .editorconfig
+  ├── .env.example                  # Secret placeholders — copy to .env
+  ├── .gitignore
+  ├── .pre-commit-config.yaml       # Git hooks: ruff, secrets scan, yaml/json checks
+  ├── docker-compose.yml            # Local dev environment
+  │
+  ├── .devcontainer/
+  │   ├── devcontainer.json         # VS Code Dev Container (Python 3.11 + Node 20)
+  │   └── Dockerfile                # Python + data/AI deps + lab-registry MCP
+  │
+  ├── .github/
+  │   ├── copilot-instructions.md   # Repo-wide Copilot context + Conventional Commits rules
+  │   ├── CODEOWNERS
+  │   ├── PULL_REQUEST_TEMPLATE.md
+  │   ├── dependabot.yml
+  │   ├── ISSUE_TEMPLATE/
+  │   │   ├── bug_report.md
+  │   │   └── feature_request.md
+  │   ├── workflows/
+  │   │   └── ci.yml                # CI: Python (pytest+ruff+mypy) + TypeScript
+  │   ├── instructions/             # Coding rules auto-applied by Copilot
+  │   │   ├── python.instructions.md
+  │   │   └── typescript.instructions.md
+  │   ├── prompts/                  # Reusable agent prompts
+  │   │   ├── init-project.prompt.md
+  │   │   ├── setup-plugins.prompt.md
+  │   │   ├── create-implementation-plan.prompt.md
+  │   │   └── review-architecture.prompt.md
+  │   ├── hooks/
+  │   │   └── protect-secrets.json  # Blocks AI writes to .env / secrets
+  │   ├── skills/                   # gen-e2 skills (Copilot)
+  │   │   ├── commit-push-pr/
+  │   │   ├── execute-plan/
+  │   │   ├── extract-design/
+  │   │   ├── generate-stories/
+  │   │   ├── implementation-plan/
+  │   │   ├── create-implementation-plan/
+  │   │   ├── architecture-review/
+  │   │   ├── architecture-review-session/
+  │   │   ├── mermaid-creator/
+  │   │   └── pdf-to-markdown/
+  │   └── agents/                   # gen-e2 agents (Copilot)
+  │       ├── figma-extractor.agent.md
+  │       └── architecture-review-agent.agent.md
+  │
+  └── .claude/
+  ├── settings.json             # autoMemory, hooks
+  ├── rules/                    # Coding rules (Claude Code)
+  │   ├── api-design.md
+  │   └── typescript.md
+  ├── hooks/
+  │   └── protect-secrets.sh
+  ├── skills/                   # gen-e2 skills (Claude Code — mirror of .github/skills/)
+  │   └── ...
+  ├── agents/                   # gen-e2 agents (Claude Code)
+  │   ├── figma-extractor.md
+  │   └── architecture-review-agent.md
+  └── plugins/                  # Plugin registry for compliance checks
+  ├── delivery/plugin.json
+  ├── implementation-plan/plugin.json
+  └── architecture-reviewer/plugin.json
 ```
 
 ## Standards Reference

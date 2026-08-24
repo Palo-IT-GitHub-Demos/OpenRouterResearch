@@ -6,7 +6,7 @@
 
 ## Arborescence complète (référence rapide)
 
-```
+```text
 repo/
 ├── CLAUDE.md                                   # Claude Code — instructions projet (versionné)
 ├── CLAUDE.local.md                             # Claude Code — notes perso (gitignore)
@@ -53,16 +53,16 @@ repo/
 
 ## Table de correspondance Copilot ↔ Claude Code
 
-| Besoin | GitHub Copilot | Claude Code |
-|---|---|---|
-| Instructions toujours actives | `.github/copilot-instructions.md` | `CLAUDE.md` |
-| Règles scoped à des chemins | `.github/instructions/*.instructions.md` | `.claude/rules/*.md` |
-| Prompts invocables manuellement | `.github/prompts/*.prompt.md` | — |
-| Skills auto + invocables | `.github/skills/<name>/SKILL.md` | `.claude/skills/<name>/SKILL.md` |
-| Agents spécialisés | `.github/agents/NAME.agent.md` | `.claude/agents/<name>.md` |
-| Hooks lifecycle | `.github/hooks/NAME.json` | `.claude/settings.json` + `.claude/hooks/*.sh` |
-| Serveurs MCP | `mcp.json` (IDE) ou `mcp-servers` dans agent | `.mcp.json` (racine) |
-| Mémoire persistante | Copilot Memory (settings GitHub) | `CLAUDE.md` + auto memory |
+| Besoin                          | GitHub Copilot                                   | Claude Code                                        |
+| ------------------------------- | ------------------------------------------------ | -------------------------------------------------- |
+| Instructions toujours actives   | `.github/copilot-instructions.md`              | `CLAUDE.md`                                      |
+| Règles scoped à des chemins   | `.github/instructions/*.instructions.md`       | `.claude/rules/*.md`                             |
+| Prompts invocables manuellement | `.github/prompts/*.prompt.md`                  | —                                                 |
+| Skills auto + invocables        | `.github/skills/<name>/SKILL.md`               | `.claude/skills/<name>/SKILL.md`                 |
+| Agents spécialisés            | `.github/agents/NAME.agent.md`                 | `.claude/agents/<name>.md`                       |
+| Hooks lifecycle                 | `.github/hooks/NAME.json`                      | `.claude/settings.json` + `.claude/hooks/*.sh` |
+| Serveurs MCP                    | `mcp.json` (IDE) ou `mcp-servers` dans agent | `.mcp.json` (racine)                             |
+| Mémoire persistante            | Copilot Memory (settings GitHub)                 | `CLAUDE.md` + auto memory                        |
 
 ---
 
@@ -148,10 +148,10 @@ Instructions lues par Copilot, Claude Code, et d'autres agents IA. Le fichier le
 ### Fonctionnalités sans fichier projet
 
 | Fonctionnalité | Configuration |
-|---|---|
+| ---------------------------------- | --------------------------------------------------------------- |
 | **MCP Servers** | `mcp.json` (chemin selon l'IDE) ou settings repository GitHub |
 | **Copilot Memory** (preview) | Settings GitHub uniquement — pas de fichier à créer |
-| **Subagents** | Runtime — sélectionnable via `@mention` dans le chat |
+| **Subagents** | Runtime — sélectionnable via`@mention` dans le chat |
 
 > `~/.copilot/` est **user-level uniquement** (Copilot CLI), jamais commité. Il n'existe pas de dossier `.copilot/` au niveau projet.
 
@@ -162,7 +162,7 @@ Instructions lues par Copilot, Claude Code, et d'autres agents IA. Le fichier le
 ### Fichiers à la racine
 
 | Fichier | Rôle | Committer |
-|---|---|---|
+| -------------------- | --------------------------------------------------- | ------------ |
 | `CLAUDE.md` | Instructions projet chargées à chaque session | ✅ Oui |
 | `CLAUDE.local.md` | Notes perso, non partagées | ❌ gitignore |
 | `.mcp.json` | Serveurs MCP partagés avec l'équipe | ✅ Oui |
@@ -172,12 +172,12 @@ Instructions lues par Copilot, Claude Code, et d'autres agents IA. Le fichier le
 
 Niveaux de portée pour `CLAUDE.md` :
 
-| Niveau | Emplacement | Versionné |
-|---|---|---|
-| Organisation | `/Library/Application Support/ClaudeCode/CLAUDE.md` | Non (MDM) |
-| User | `~/.claude/CLAUDE.md` | Non |
-| Projet | `./CLAUDE.md` ou `./.claude/CLAUDE.md` | ✅ Oui |
-| Local | `./CLAUDE.local.md` | ❌ gitignore |
+| Niveau       | Emplacement                                           | Versionné   |
+| ------------ | ----------------------------------------------------- | ------------ |
+| Organisation | `/Library/Application Support/ClaudeCode/CLAUDE.md` | Non (MDM)    |
+| User         | `~/.claude/CLAUDE.md`                               | Non          |
+| Projet       | `./CLAUDE.md` ou `./.claude/CLAUDE.md`            | ✅ Oui       |
+| Local        | `./CLAUDE.local.md`                                 | ❌ gitignore |
 
 ### `.claude/settings.json`
 
@@ -260,7 +260,7 @@ Markdown body avec les instructions...
 
 Structure du dossier :
 
-```
+```text
 my-skill/
 ├── SKILL.md        # fichier principal (requis, nom fixe)
 ├── helper.sh       # scripts référençables
@@ -273,7 +273,7 @@ my-skill/
 
 Les plugins empaquettent skills, agents, hooks et MCP servers pour les partager entre projets.
 
-```
+```text
 my-plugin/
 ├── .claude-plugin/
 │   └── plugin.json           # manifeste (nom, version, description)
@@ -301,11 +301,11 @@ Commandes : `claude plugin install`, `/plugin list`, `/reload-plugins`, `claude 
 ## Ce qui N'est PAS un standard officiel
 
 | Ce qu'on voit parfois | Réalité |
-|---|---|
+| ------------------------------- | --------------------------------------------------------------------- |
 | `ai/` à la racine | Convention custom — aucun outil ne le lit nativement |
-| `.copilot/` au niveau projet | N'existe pas — c'est `~/.copilot/` user-level uniquement |
+| `.copilot/` au niveau projet | N'existe pas — c'est`~/.copilot/` user-level uniquement |
 | `ai/plugins/`, `ai/agents/` | Standards gen-e2 marketplace, non reconnus par Copilot ou Claude Code |
-| `.claude/commands/` | Déprécié — remplacé par `.claude/skills/` |
+| `.claude/commands/` | Déprécié — remplacé par`.claude/skills/` |
 
 ---
 

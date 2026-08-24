@@ -1,4 +1,6 @@
-.PHONY: help install dev test lint fmt type-check run collect judge merge dashboard
+.PHONY: help install dev test test-cov lint fmt type-check docs-build docs-serve run collect judge merge dashboard dry-run export-gen-e2
+
+PYTHON ?= .venv/bin/python
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -9,34 +11,46 @@ install: ## Install production dependencies
 	npm install --omit=dev
 
 dev: ## Install all dependencies (including dev)
-	pip install -e ".[dev]"
+	pip install -e ".[dev,docs]"
 	npm install
 	pre-commit install
 
 test: ## Run all tests (Python)
-	pytest --tb=short
+	$(PYTHON) -m pytest --tb=short
+
+test-cov: ## Run tests with a coverage report (requires pytest-cov, see [dev] extras)
+	$(PYTHON) -m pytest --cov=src --cov-report=term-missing --tb=short
 
 lint: ## Run all linters
-	ruff check .
+	$(PYTHON) -m ruff check .
 	npm run lint
 
 fmt: ## Auto-format all code
-	ruff format .
+	$(PYTHON) -m ruff format .
 	npm run format
 
 type-check: ## Run type checkers
-	mypy src/
+	$(PYTHON) -m mypy src/
 	npm run type-check
 
+docs-build: ## Build documentation and validate links strictly
+	$(PYTHON) -m mkdocs build --strict
+
+docs-serve: ## Preview documentation with live reload
+	$(PYTHON) -m mkdocs serve
+
 run: ## Phase 1 — collecte réponses + éval déterministe + sécurité (alias de collect)
-	python -m src.main collect
+	$(PYTHON) -m src.main collect
 	@echo ""
 	@echo "Étape suivante — Phase 2 : dans Copilot chat, invoquer :"
 	@echo "  @judge-coordinator   (lance les 3 juges en parallèle automatiquement)"
 	@echo "Puis Phase 3 : make merge"
 
 collect: ## Phase 1 — collect responses + deterministic eval + security (lit TARGET_MODELS depuis .env)
-	python -m src.main collect
+	$(PYTHON) -m src.main collect
+
+dry-run: ## Simulation offline du pipeline complet — AUCUN appel OpenRouter, AUCUN agent juge (vérification avant un run payant)
+	$(PYTHON) -m src.main dry-run
 
 judge: ## Phase 2 — ouvrir un agent juge Copilot (choisir parmi les 3 providers)
 	@echo "Option A — coordinateur (recommandé) : lance les 3 juges automatiquement"
@@ -49,7 +63,13 @@ judge: ## Phase 2 — ouvrir un agent juge Copilot (choisir parmi les 3 provider
 	@ls data/intermediate/judging_*.json 2>/dev/null | tail -1 || echo "  (aucun — lancer make collect d'abord)"
 
 merge: ## Phase 3 — merge Copilot scores + export final results
-	python -m src.main merge
+	$(PYTHON) -m src.main merge
 
 dashboard: ## Launch the Streamlit dashboard
-	streamlit run dashboard/app.py
+	$(PYTHON) -m streamlit run dashboard/app.py
+
+export-gen-e2: ## Export latest benchmark to gen-e2-eval compatible YAML (set PROFILE=<name> to override)
+	$(PYTHON) scripts/export_gen_e2_registry.py \
+		--results $(shell ls -t results/benchmark_*.json 2>/dev/null | head -1) \
+		--output evaluation/candidates/openrouter-security-pricing.yaml \
+		--profile $(if $(PROFILE),$(PROFILE),enterprise_qa)
