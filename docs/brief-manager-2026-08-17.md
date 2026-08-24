@@ -166,16 +166,18 @@ but both reduce the risk of spending budget on an avoidable configuration error.
 
 Goal: justify a small initial budget request for one developer.
 
-### Step 1: Cost per request (from existing project pricing range)
+### Step 1: Planning cost range per request
 
-Observed monthly TCO range under the `enterprise_qa` workload profile
-(see workload profile table in [docs/workflow.md](workflow.md), section
-"Stage Coût", and `compute_tco` in
-[src/evaluators/cost_analyzer.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/evaluators/cost_analyzer.py)):
+For this initial request, the relevant volume is the benchmark itself, not a
+monthly `enterprise_qa` workload. The price range below is retained as a
+conservative planning range from the project's live-pricing calculations; the
+final amount will be measured from OpenRouter's `usage.cost` field after each
+run (see [docs/workflow.md](workflow.md), section "Stage Coût").
 
 - TCO low: 94.62 USD/month
 - TCO high: 437.04 USD/month
-- Workload: 15,000 requests/month (500/day x 30 days)
+- Benchmark volume: 63 requests per standard run, or 138 requests with the
+  extended OWASP probes
 
 Formula:
 
@@ -218,24 +220,26 @@ Results:
 - low: 0.87 USD/run
 - high: 4.02 USD/run
 
-### Step 3: Initial 15 USD request justification
+### Step 3: Initial 30 USD request justification
 
-With 15 USD, expected capacity is:
+With 30 USD, expected capacity is:
 
-- baseline mode: about 8 to 37 runs
-- extended OWASP mode: about 3 to 17 runs
+- baseline mode: about 16 to 75 runs
+- extended OWASP mode: about 7 to 34 runs
 
-This is enough for initial developer validation (tests + 1-2 complete cycles).
+This provides room for several complete validation cycles, retries, and normal
+variation in token usage. The actual cost ledger will be reported after the
+first runs, and any further budget request will be based on measured usage.
 
 ## 8. Management Decision Requested
 
 - Approve one dedicated OpenRouter API key for this project
-- Approve an initial 15 USD development budget
+- Approve an initial 30 USD development budget
 - Reassess after actual usage data from first complete cycles
 
 ## 9. 60-Second Talking Script (Simple English)
 
-"The benchmark pipeline is now working end-to-end, and our engineering quality is strong with all tests passing (186/186 as of 2026-08-24). We can already run quality, security, and cost evaluation in one process. The current limitation is not architecture, it is free-tier rate limits, which reduce evaluation coverage and confidence. To move from technical validation to decision-grade results, we need a dedicated OpenRouter API key. I am requesting a small initial budget of 15 USD, which is enough for first full validation cycles. After that, we will report real usage and adjust budget only if needed."
+"The benchmark pipeline is now working end-to-end, and our engineering quality is strong with all tests passing (186/186 as of 2026-08-24). We can already run quality, security, and cost evaluation in one process. The current limitation is not architecture, it is free-tier rate limits, which reduce evaluation coverage and confidence. To move from technical validation to decision-grade results, we need a dedicated OpenRouter API key. I am requesting an initial budget of 30 USD, based on the actual benchmark volume of 63 requests per standard run or 138 requests with the extended OWASP probes. We will measure the real cost returned by OpenRouter after each run and report the results before requesting any further budget."
 
 ## 10. Revision Note
 
