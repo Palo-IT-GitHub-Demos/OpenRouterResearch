@@ -31,9 +31,7 @@ def compute_pareto_front(
     if df.empty:
         return df.copy()
 
-    sorted_df = df.sort_values(
-        [cost_col, quality_col], ascending=[True, False]
-    ).reset_index(drop=True)
+    sorted_df = df.sort_values([cost_col, quality_col], ascending=[True, False]).reset_index(drop=True)
     pareto_mask: list[bool] = []
     max_quality_seen = float("-inf")
 
