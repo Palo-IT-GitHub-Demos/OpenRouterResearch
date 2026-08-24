@@ -25,28 +25,28 @@ cd "${CLAUDE_PLUGIN_ROOT:-.claude}/skills/pdf-to-markdown/scripts"
 npm install   # first run only
 node extract.mjs <input.pdf> ../../../.tmp/<pdf-basename>
 ```
-Outputs per page: `assets/page-NN.png` (300 DPI), `text/page-NN.txt`, `manifest.json`.  
+Outputs per page: `assets/page-NN.png` (300 DPI), `text/page-NN.txt`, `manifest.json`.
 **Verify:** pageCount matches; all PNGs > 100 KB; text files have readable content.
 
 ### Step 2 — Triage
-View every PNG. Build a triage table (page | type | content note | approach) and present to user. Wait for confirmation.  
+View every PNG. Build a triage table (page | type | content note | approach) and present to user. Wait for confirmation.
 Types: **text-only** · **diagram** (two-pass Mermaid) · **table** (markdown table) · **mixed** (split by region). See `reference/diagram-triage.md`.
 
 ### Step 3 — Convert text pages
-Strip: page numbers, running headers, `Error! Bookmark not defined.`, dotted TOC leaders.  
+Strip: page numbers, running headers, `Error! Bookmark not defined.`, dotted TOC leaders.
 Preserve: section numbers, bullet structure, emphasis.
 
 ### Step 4 — Convert diagram pages — TWO PASSES MANDATORY
-**Pass 1:** View PNG → identify type (`reference/mermaid-architecture-patterns.md`) → write node/edge inventory → draft Mermaid with `classDef` colours.  
-**Pass 2:** View PNG again → walk inventory against draft → catch missed annotations/edges → complete verification checklist → refine until every item is genuinely ticked.  
+**Pass 1:** View PNG → identify type (`reference/mermaid-architecture-patterns.md`) → write node/edge inventory → draft Mermaid with `classDef` colours.
+**Pass 2:** View PNG again → walk inventory against draft → catch missed annotations/edges → complete verification checklist → refine until every item is genuinely ticked.
 Do not skip Pass 2 on diagrams that look simple.
 
 ### Step 5 — Convert table pages
-Markdown table with text labels. If logos are used, zoom the PNG to read names. Preserve exact column/row structure.  
+Markdown table with text labels. If logos are used, zoom the PNG to read names. Preserve exact column/row structure.
 Do **not** embed the source PNG — the markdown table is the complete representation. No `![Source: page N]` line for table pages.
 
 ### Step 6 — Assemble `<pdf-basename>.md`
-Combine sections in page order per `reference/output-format.md`. Every diagram: PNG above, Mermaid block, checklist below.  
+Combine sections in page order per `reference/output-format.md`. Every diagram: PNG above, Mermaid block, checklist below.
 Write to `.tmp/<pdf-basename>/<pdf-basename>.md` — **not** `output.md`.
 
 ### Step 7 — Self-check
