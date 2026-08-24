@@ -218,24 +218,24 @@ Results:
 - low: 0.87 USD/run
 - high: 4.02 USD/run
 
-### Step 3: Initial 10 USD request justification
+### Step 3: Initial 15 USD request justification
 
-With 10 USD, expected capacity is:
+With 15 USD, expected capacity is:
 
-- baseline mode: about 5 to 25 runs
-- extended OWASP mode: about 2 to 11 runs
+- baseline mode: about 8 to 37 runs
+- extended OWASP mode: about 3 to 17 runs
 
 This is enough for initial developer validation (tests + 1-2 complete cycles).
 
 ## 8. Management Decision Requested
 
 - Approve one dedicated OpenRouter API key for this project
-- Approve an initial 10 USD development budget
+- Approve an initial 15 USD development budget
 - Reassess after actual usage data from first complete cycles
 
 ## 9. 60-Second Talking Script (Simple English)
 
-"The benchmark pipeline is now working end-to-end, and our engineering quality is strong with all tests passing (186/186 as of 2026-08-24). We can already run quality, security, and cost evaluation in one process. The current limitation is not architecture, it is free-tier rate limits, which reduce evaluation coverage and confidence. To move from technical validation to decision-grade results, we need a dedicated OpenRouter API key. I am requesting a small initial budget of 10 USD, which is enough for first full validation cycles. After that, we will report real usage and adjust budget only if needed."
+"The benchmark pipeline is now working end-to-end, and our engineering quality is strong with all tests passing (186/186 as of 2026-08-24). We can already run quality, security, and cost evaluation in one process. The current limitation is not architecture, it is free-tier rate limits, which reduce evaluation coverage and confidence. To move from technical validation to decision-grade results, we need a dedicated OpenRouter API key. I am requesting a small initial budget of 15 USD, which is enough for first full validation cycles. After that, we will report real usage and adjust budget only if needed."
 
 ## 10. Revision Note
 
@@ -251,8 +251,6 @@ passing, `ruff` and `mypy --strict` clean (full findings in
 [docs/audit-2026-08-21.md](audit-2026-08-21.md)). Two spend-safety guardrails
 landed since the last revision (free-tier volume preflight warning,
 `TARGET_MODELS` catalog validation — both in `src/main.py`). The core ask in
-§8 is unchanged and, from an engineering standpoint, ready to send: no open
-blocker requires resolving before requesting the key/budget. One housekeeping
-item: the working tree currently has pending uncommitted audit/engineering
-changes — commit or stash those before sharing the repo alongside this ask,
-so a reviewer sees a clean, reproducible baseline.
+§8 is unchanged apart from the requested budget, and, from an engineering
+standpoint, ready to send: no open blocker requires resolving before requesting
+the key/budget. The repository is clean and the baseline is reproducible.
