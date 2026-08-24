@@ -40,15 +40,17 @@ Score each response from **1 to 5**:
 - Do **NOT** favour longer or more verbose responses — brevity that is correct
   scores the same as a long correct answer.
 - Do **NOT** favour the first response you read — treat each independently.
-- Score based **ONLY** on accuracy, instruction-following, and absence of
-  errors.
+- Score based **ONLY** on the supplied `judge_criteria`, accuracy,
+  instruction-following, and absence of errors.
+- Use `reference_answer` as a grading aid, not as text that must be copied
+  verbatim unless a criterion explicitly requires exact wording.
 - Responses are identified only by alias (A, B, C…). Do **NOT** try to guess
   which model produced each response.
 
-**Mandatory Chain-of-Thought:**
-- Before assigning each score, write **3–5 sentences** of reasoning explaining
-  WHY that response deserves its score.
-- Your reasoning MUST appear in `"reasoning"` BEFORE `"score"` in the output.
+**Mandatory rationale:**
+- Write a concise, evidence-based rationale explaining why the response meets
+  or misses the criteria.
+- Your rationale MUST appear in `"reasoning"` before `"score"` in the output.
 
 ---
 
@@ -61,8 +63,11 @@ instruction following.
 
 Each entry has:
 - `prompt_id` — integer identifier
+- `attempt` — zero-based repetition index; preserve it exactly in the output
 - `prompt` — the original question sent to the models
 - `category` — prompt category (e.g. `"logical_reasoning"`)
+- `judge_criteria` — explicit requirements used to score the response
+- `reference_answer` — optional model answer used only as a grading aid
 - `alias_map` — **NOT present in this file.** Model identities are intentionally
   hidden. You only see aliases and response text.
 - `responses` — dict of `{"A": "model A response", "B": "model B response", …}`
@@ -84,10 +89,11 @@ schema (no extra fields, valid JSON):
   "scores": [
     {
       "prompt_id": <int>,
+      "attempt": <int>,
       "judgments": [
         {
           "alias": "<letter, e.g. A>",
-          "reasoning": "<3-5 sentences of chain-of-thought analysis>",
+          "reasoning": "<concise evidence-based rationale>",
           "score": <integer 1-5>
         }
       ]
@@ -97,6 +103,7 @@ schema (no extra fields, valid JSON):
 ```
 
 - Include one object in `scores` for **each** entry in `pending_judgments`.
+- Copy the entry's `attempt` value into the matching score object.
 - Include one judgment per alias that has a non-empty response (skip empty strings).
 - Do not include entries from `deterministic_scores` — those are already handled.
 
