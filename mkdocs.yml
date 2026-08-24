@@ -1,0 +1,50 @@
+site_name: OpenRouter Research
+site_description: >-
+  Pipeline de pré-sélection générique des modèles OpenRouter — qualité, sécurité et coût.
+repo_url: https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - tables
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: ["."]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_if_no_docstring: false
+
+nav:
+  - Accueil: index.md
+  - Workflow: workflow.md
+  - Brief manager: brief-manager-2026-08-17.md
+  - "Audit critique (2026-08-21)": audit-2026-08-21.md
+  - Référence API: reference/api.md
+  - ADR:
+      - "0001 — Architecture initiale": adr/0001-architecture-initiale.md
+  - Plans:
+      - "V2 — Pipeline async, observabilité, juge hybride": plans/feature-pipeline-v2-1.md
+      - "Sécurité & coût — spécialisation": plans/feature-security-cost-specialization-1.md
+  - Maintenance de la documentation: documentation.md
