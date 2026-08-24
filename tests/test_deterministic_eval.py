@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from src.evaluators.deterministic_eval import (
     CHECKS,
+    ExactAnswerCheck,
     ExactFormatCheck,
     JsonValidityCheck,
     PythonSyntaxCheck,
@@ -40,6 +41,26 @@ class TestJsonValidityCheck:
         result = check.run("", "bad")
         assert len(result.reason) > 0
 
+    def test_expected_json_must_match_content(self) -> None:
+        check = JsonValidityCheck()
+        result = check.run(
+            "",
+            '{"status": "wrong"}',
+            {"expected_json": {"status": "ok"}, "strict_output": True},
+        )
+        assert result.passed is False
+        assert result.score == 1
+
+    def test_strict_json_rejects_markdown_fences(self) -> None:
+        check = JsonValidityCheck()
+        result = check.run(
+            "",
+            '```json\n{"status": "ok"}\n```',
+            {"expected_json": {"status": "ok"}, "strict_output": True},
+        )
+        assert result.passed is False
+        assert result.score == 1
+
 
 class TestPythonSyntaxCheck:
     def test_valid_function_passes(self) -> None:
@@ -61,10 +82,31 @@ class TestPythonSyntaxCheck:
         result = check.run("", "```python\nx = 1 + 1\n```")
         assert result.passed is True
 
-    def test_empty_string_passes(self) -> None:
+    def test_empty_string_fails(self) -> None:
         check = PythonSyntaxCheck()
         result = check.run("", "")
+        assert result.passed is False
+        assert result.score == 1
+
+    def test_required_function_contract_passes_without_execution(self) -> None:
+        check = PythonSyntaxCheck()
+        result = check.run(
+            "",
+            "def add(a: int, b: int) -> int:\n    return a + b",
+            {"required_function": "add", "required_parameters": ["a", "b"]},
+        )
         assert result.passed is True
+        assert result.score == 5
+
+    def test_required_function_contract_rejects_wrong_parameters(self) -> None:
+        check = PythonSyntaxCheck()
+        result = check.run(
+            "",
+            "def add(left: int, right: int) -> int:\n    return left + right",
+            {"required_function": "add", "required_parameters": ["a", "b"]},
+        )
+        assert result.passed is False
+        assert result.score == 1
 
 
 class TestExactFormatCheck:
@@ -79,6 +121,18 @@ class TestExactFormatCheck:
         result = check.run("", "")
         assert len(result.reason) > 0
 
+    def test_exact_answer_accepts_normalized_whitespace_and_case(self) -> None:
+        check = ExactAnswerCheck()
+        result = check.run("", "  canberra\n", {"accepted_answers": ["Canberra"]})
+        assert result.passed is True
+        assert result.score == 5
+
+    def test_exact_answer_rejects_extra_text(self) -> None:
+        check = ExactAnswerCheck()
+        result = check.run("", "The answer is Canberra.", {"accepted_answers": ["Canberra"]})
+        assert result.passed is False
+        assert result.score == 1
+
 
 class TestChecksRegistry:
     def test_json_output_registered(self) -> None:
@@ -91,6 +145,9 @@ class TestChecksRegistry:
 
     def test_instruction_following_registered(self) -> None:
         assert "instruction_following" in CHECKS
+
+    def test_exact_answer_registered(self) -> None:
+        assert "exact_answer" in CHECKS
 
 
 class TestStripCodeFences:

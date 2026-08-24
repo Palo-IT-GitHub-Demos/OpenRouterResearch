@@ -17,20 +17,23 @@ handled by GitHub Copilot agents — zero extra API cost.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import random
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.api.openrouter_client import AsyncOpenRouterClient, OpenRouterClient
 from src.evaluators.deterministic_eval import CHECKS
 
 logger = logging.getLogger(__name__)
+
+QUALITY_SUITE_VERSION = "generic-screen-v1"
 
 # ── Pydantic models for structured judge output ────────────────────────────────
 
@@ -39,12 +42,8 @@ class ModelScore(BaseModel):
     """Score for a single model alias as returned by the judge."""
 
     model_alias: str = Field(description="Alias assigned to the model (e.g. 'A').")
-    reasoning: str = Field(
-        description="3-5 sentence chain-of-thought analysis before the score."
-    )
-    score: int = Field(
-        ge=1, le=5, description="Quality score from 1 (worst) to 5 (best)."
-    )
+    reasoning: str = Field(description="Brief evidence-based rationale for the assigned score.")
+    score: int = Field(ge=1, le=5, description="Quality score from 1 (worst) to 5 (best).")
 
 
 class JudgeOutput(BaseModel):
@@ -61,6 +60,72 @@ class JudgeResult(BaseModel):
     reasoning: str
 
 
+_EXACT_ANSWER_CATEGORIES = {"exact_answer", "factual_sanity", "logical_reasoning"}
+
+
+def _validate_evaluation_contract(category: str, accepted_answers: list[str], judge_criteria: list[str]) -> None:
+    """Require objective references or explicit judge criteria for a category.
+
+    Kept independent of :class:`QualityPrompt` so the business rule can be
+    unit-tested and reused (e.g. by a prompt-authoring CLI) without
+    constructing a full Pydantic model.
+
+    Raises:
+        ValueError: If the category requires accepted answers or judge
+            criteria and none were supplied.
+    """
+    if category in _EXACT_ANSWER_CATEGORIES and not accepted_answers:
+        raise ValueError(f"Category '{category}' requires non-empty accepted_answers.")
+    if category not in CHECKS and not judge_criteria:
+        raise ValueError(f"Unmapped category '{category}' requires non-empty judge_criteria for blind evaluation.")
+
+
+class QualityPrompt(BaseModel):
+    """Validated definition of one provider-neutral quality-screen prompt."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str = Field(min_length=1)
+    category: str = Field(min_length=1)
+    quality_dimension: str = Field(default="general", min_length=1)
+    responses: dict[str, str] = Field(default_factory=dict)
+    accepted_answers: list[str] = Field(default_factory=list)
+    expected_json: object | None = None
+    strict_output: bool = False
+    required_function: str | None = None
+    required_parameters: list[str] = Field(default_factory=list)
+    judge_criteria: list[str] = Field(default_factory=list)
+    reference_answer: str | None = None
+    weight: float = Field(default=1.0, gt=0.0)
+
+    @model_validator(mode="after")
+    def validate_evaluation_contract(self) -> QualityPrompt:
+        """Require objective references or explicit judge criteria per prompt."""
+        _validate_evaluation_contract(self.category, self.accepted_answers, self.judge_criteria)
+        return self
+
+    @property
+    def evaluation_context(self) -> dict[str, object]:
+        """Return the deterministic-check metadata for this prompt."""
+        return {
+            "accepted_answers": self.accepted_answers,
+            "expected_json": self.expected_json,
+            "strict_output": self.strict_output,
+            "required_function": self.required_function,
+            "required_parameters": self.required_parameters,
+        }
+
+
+@dataclass(frozen=True)
+class CollectedResponse:
+    """One model response or collection failure for a prompt attempt."""
+
+    model: str
+    attempt: int
+    content: str
+    error: str | None = None
+
+
 @dataclass
 class CollectResult:
     """Output of :meth:`AsyncQualityJudge.run_collect`.
@@ -71,6 +136,11 @@ class CollectResult:
 
     deterministic_rows: list[dict[str, object]] = field(default_factory=list)
     pending_judgments: list[dict[str, object]] = field(default_factory=list)
+    collection_errors: list[dict[str, object]] = field(default_factory=list)
+    prompt_count: int = 0
+    dimension_count: int = 0
+    repetitions: int = 1
+    quality_suite_id: str = ""
     # pending_judgments schema:
     # [{
     #   "prompt_id": int,
@@ -99,19 +169,21 @@ Critical anti-bias rules (you MUST follow these):
   - Do NOT favour longer or more verbose responses. Brevity that is correct \
 scores the same as a long correct answer.
   - Do NOT favour the first response you read. Treat each response independently.
-  - Score based ONLY on accuracy, instruction-following, and absence of errors.
+    - Score based ONLY on the supplied evaluation criteria, accuracy,
+        instruction-following, and absence of errors.
+    - Use the reference answer as a grading aid, not as wording that must be
+        copied verbatim unless a criterion explicitly requires exact wording.
 
-Chain-of-Thought requirement:
-  - Before assigning any score, reason through your evaluation in 3-5 sentences.
-  - Explain WHY each response deserves its score, referencing specific issues.
-  - Your reasoning MUST appear in the JSON "reasoning" field BEFORE the "score" field.
+Rationale requirement:
+    - Provide a concise, evidence-based rationale for each score.
+    - Reference the relevant criterion or concrete response evidence.
 
 You MUST respond with a valid JSON object matching exactly this schema:
 {
   "scores": [
     {
       "model_alias": "<alias letter, e.g. A>",
-      "reasoning": "<3-5 sentence chain-of-thought analysis>",
+    "reasoning": "<concise evidence-based rationale>",
       "score": <1-5>
     },
     ...
@@ -124,6 +196,9 @@ Do not include any text outside the JSON object."""
 _USER_TEMPLATE = """\
 ## Prompt given to models
 {prompt}
+
+## Evaluation context
+{evaluation_context}
 
 ## Responses to evaluate
 {responses_block}
@@ -147,24 +222,27 @@ class QualityJudge:
         self,
         prompt: str,
         responses: dict[str, str],
+        judge_criteria: list[str] | None = None,
+        reference_answer: str | None = None,
     ) -> dict[str, JudgeResult]:
-        """Score each model's response using the judge LLM."""
+        """Score each model response using blind aliases and explicit criteria."""
         if not responses:
             return {}
 
-        model_ids = list(responses.keys())
-        random.shuffle(model_ids)
-        alias_map: dict[str, str] = {
-            _alias(i): model_id for i, model_id in enumerate(model_ids)
-        }
+        alias_map = _blind_alias_map(
+            responses.keys(),
+            seed_material=f"sync|{prompt}|{'|'.join(sorted(responses))}",
+        )
+        model_ids = list(alias_map.values())
         reverse_map: dict[str, str] = {v: k for k, v in alias_map.items()}
 
         responses_block = "\n\n".join(
-            f"[MODEL {reverse_map[model_id]}]\n{responses[model_id]}"
-            for model_id in model_ids
+            f"[MODEL {reverse_map[model_id]}]\n{responses[model_id]}" for model_id in model_ids
         )
         user_message = _USER_TEMPLATE.format(
-            prompt=prompt, responses_block=responses_block
+            prompt=prompt,
+            evaluation_context=_format_judge_context(judge_criteria, reference_answer),
+            responses_block=responses_block,
         )
 
         completion = self._client.chat_completion(
@@ -173,6 +251,7 @@ class QualityJudge:
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": user_message},
             ],
+            usage_context="quality_judge",
             temperature=0,
         )
 
@@ -198,18 +277,20 @@ class QualityJudge:
 
     def run_dataset(self, prompts_path: Path) -> pd.DataFrame:
         """Evaluate all prompts in a fixture file (responses must be pre-filled)."""
-        with prompts_path.open() as fh:
-            dataset: list[dict[str, Any]] = json.load(fh)
+        dataset = load_quality_prompts(prompts_path)
 
         rows: list[dict[str, object]] = []
         for idx, entry in enumerate(dataset):
-            prompt: str = entry["prompt"]
-            responses: dict[str, str] = entry.get("responses", {})
+            prompt = entry.prompt
+            responses = entry.responses
             if not responses:
                 continue
             logger.info("Evaluating prompt %d/%d …", idx + 1, len(dataset))
             for model_id, result in self.evaluate(
-                prompt=prompt, responses=responses
+                prompt=prompt,
+                responses=responses,
+                judge_criteria=entry.judge_criteria,
+                reference_answer=entry.reference_answer,
             ).items():
                 rows.append(
                     {
@@ -218,14 +299,17 @@ class QualityJudge:
                         "model": model_id,
                         "score": result.score,
                         "reasoning": result.reasoning,
+                        "category": entry.category,
+                        "quality_dimension": entry.quality_dimension,
+                        "weight": entry.weight,
+                        "attempt": 0,
+                        "source": "sync-judge",
                     }
                 )
 
         df = pd.DataFrame(rows)
         return (
-            df.sort_values(["prompt_id", "score"], ascending=[True, False]).reset_index(
-                drop=True
-            )
+            df.sort_values(["prompt_id", "attempt", "score"], ascending=[True, True, False]).reset_index(drop=True)
             if not df.empty
             else df
         )
@@ -258,6 +342,7 @@ class AsyncQualityJudge:
         prompt: str,
         responses: dict[str, str],
         category: str | None = None,
+        evaluation: dict[str, object] | None = None,
     ) -> dict[str, JudgeResult]:
         """Score each model's response using deterministic checks only.
 
@@ -275,7 +360,7 @@ class AsyncQualityJudge:
             check = CHECKS.get(category)
             if check is not None:
                 for model_id, response in responses.items():
-                    cr = check.run(prompt, response)
+                    cr = check.run(prompt, response, evaluation)
                     if cr.score is not None:
                         results[model_id] = JudgeResult(
                             model=model_id,
@@ -289,18 +374,17 @@ class AsyncQualityJudge:
         self,
         prompts_path: Path,
         models: list[str],
+        repetitions: int = 1,
     ) -> pd.DataFrame:
         """Run deterministic evaluation and return scores as a DataFrame.
 
         Undecidable responses are not included. Use ``run_collect`` +
         a Copilot judge agent (Phase 2) + ``make merge`` for complete results.
         """
-        result = await self.run_collect(prompts_path, models)
+        result = await self.run_collect(prompts_path, models, repetitions=repetitions)
         df = pd.DataFrame(result.deterministic_rows)
         return (
-            df.sort_values(["prompt_id", "score"], ascending=[True, False]).reset_index(
-                drop=True
-            )
+            df.sort_values(["prompt_id", "score"], ascending=[True, False]).reset_index(drop=True)
             if not df.empty
             else df
         )
@@ -311,67 +395,93 @@ class AsyncQualityJudge:
         self,
         prompts_path: Path,
         models: list[str],
+        repetitions: int = 1,
     ) -> CollectResult:
         """Collect model responses + run deterministic checks.  No LLM calls.
 
-        Returns a :class:`CollectResult` separating:
-        - **deterministic_rows** — prompts with a clear pass/fail (json, code syntax).
-        - **pending_judgments** — undecidable responses that require a judge.
+        Returns a :class:`CollectResult` separating deterministic scores,
+        blind-judge work, and transport failures. A response failure is never
+        silently misclassified as a model-quality failure.
 
         Aliased responses in ``pending_judgments`` preserve position-bias
         mitigation: the ``alias_map`` is needed by :class:`MergePipeline` to
         remap Copilot's scores back to model IDs.
         """
-        with prompts_path.open() as fh:
-            dataset: list[dict[str, Any]] = json.load(fh)
+        if repetitions < 1:
+            raise ValueError("repetitions must be greater than or equal to 1.")
+
+        dataset = load_quality_prompts(prompts_path)
 
         deterministic_rows: list[dict[str, object]] = []
         pending_judgments: list[dict[str, object]] = []
+        collection_errors: list[dict[str, object]] = []
 
-        async def _process(idx: int, entry: dict[str, Any]) -> None:
-            prompt: str = entry["prompt"]
-            category: str | None = entry.get("category")
-            logger.info(
-                "Collecting responses for prompt %d/%d …", idx + 1, len(dataset)
-            )
-            responses = await self._collect_responses(prompt, models)
+        async def _process(idx: int, entry: QualityPrompt) -> None:
+            prompt = entry.prompt
+            logger.info("Collecting responses for prompt %d/%d …", idx + 1, len(dataset))
+            collected = await self._collect_responses(prompt, models, repetitions)
 
-            check = CHECKS.get(category or "") if category else None
-            undecidable: dict[str, str] = {}
+            check = CHECKS.get(entry.category)
+            undecidable_by_attempt: dict[int, dict[str, str]] = {}
 
-            if check is not None:
-                for model_id, response in responses.items():
-                    cr = check.run(prompt, response)
-                    if cr.score is not None:
+            for item in collected:
+                row_metadata = {
+                    "prompt_id": idx,
+                    "attempt": item.attempt,
+                    "prompt_preview": prompt[:80],
+                    "model": item.model,
+                    "category": entry.category,
+                    "quality_dimension": entry.quality_dimension,
+                    "weight": entry.weight,
+                }
+                if item.error is not None:
+                    collection_errors.append({**row_metadata, "error": item.error})
+                    continue
+
+                if not item.content.strip():
+                    deterministic_rows.append(
+                        {
+                            **row_metadata,
+                            "score": 1,
+                            "reasoning": "Model returned an empty response.",
+                            "source": "deterministic-empty-response",
+                        }
+                    )
+                    continue
+
+                if check is not None:
+                    check_result = check.run(prompt, item.content, entry.evaluation_context)
+                    if check_result.score is not None:
                         deterministic_rows.append(
                             {
-                                "prompt_id": idx,
-                                "prompt_preview": prompt[:80],
-                                "model": model_id,
-                                "score": cr.score,
-                                "reasoning": cr.reason,
+                                **row_metadata,
+                                "score": check_result.score,
+                                "reasoning": check_result.reason,
                                 "source": "deterministic",
                             }
                         )
-                    else:
-                        undecidable[model_id] = response
-            else:
-                undecidable = dict(responses)
+                        continue
 
-            if undecidable:
-                model_ids = list(undecidable.keys())
-                random.shuffle(model_ids)
-                alias_map = {_alias(i): mid for i, mid in enumerate(model_ids)}
+                undecidable_by_attempt.setdefault(item.attempt, {})[item.model] = item.content
+
+            for attempt, undecidable in undecidable_by_attempt.items():
+                alias_map = _blind_alias_map(
+                    undecidable.keys(),
+                    seed_material=f"{QUALITY_SUITE_VERSION}|{idx}|{attempt}|{prompt}",
+                )
                 pending_judgments.append(
                     {
                         "prompt_id": idx,
+                        "attempt": attempt,
                         "prompt": prompt,
                         "prompt_preview": prompt[:80],
-                        "category": category,
+                        "category": entry.category,
+                        "quality_dimension": entry.quality_dimension,
+                        "weight": entry.weight,
+                        "judge_criteria": entry.judge_criteria,
+                        "reference_answer": entry.reference_answer,
                         "alias_map": alias_map,
-                        "responses": {
-                            alias: undecidable[mid] for alias, mid in alias_map.items()
-                        },
+                        "responses": {alias: undecidable[mid] for alias, mid in alias_map.items()},
                     }
                 )
 
@@ -379,42 +489,98 @@ class AsyncQualityJudge:
 
         return CollectResult(
             deterministic_rows=sorted(
-                deterministic_rows, key=lambda r: int(str(r["prompt_id"]))
+                deterministic_rows,
+                key=lambda row: (int(str(row["prompt_id"])), int(str(row["attempt"]))),
             ),
             pending_judgments=sorted(
-                pending_judgments, key=lambda p: int(str(p["prompt_id"]))
+                pending_judgments,
+                key=lambda pending: (int(str(pending["prompt_id"])), int(str(pending["attempt"]))),
             ),
+            collection_errors=sorted(
+                collection_errors,
+                key=lambda row: (int(str(row["prompt_id"])), int(str(row["attempt"]))),
+            ),
+            prompt_count=len(dataset),
+            dimension_count=len({entry.quality_dimension for entry in dataset}),
+            repetitions=repetitions,
+            quality_suite_id=quality_suite_id(prompts_path),
         )
 
     # ── Private helpers ────────────────────────────────────────────────────────
 
     async def _collect_responses(
-        self, prompt: str, models: list[str]
-    ) -> dict[str, str]:
-        """Send *prompt* to all *models* in parallel and return responses."""
+        self,
+        prompt: str,
+        models: list[str],
+        repetitions: int,
+    ) -> list[CollectedResponse]:
+        """Send each prompt attempt to all models concurrently.
 
-        async def _get(model: str) -> tuple[str, str]:
+        Failures are represented explicitly to keep transport availability out
+        of the model-quality score.
+        """
+
+        async def _get(model: str, attempt: int) -> CollectedResponse:
             try:
                 completion = await self._client.chat_completion(
                     model=model,
                     messages=[{"role": "user", "content": prompt}],
+                    usage_context="quality_screen",
                     temperature=0,
                 )
-                content = (
-                    completion.choices[0].message.content
-                    if completion.choices
-                    else None
-                )
-                return model, content or ""
+                content = completion.choices[0].message.content if completion.choices else None
+                return CollectedResponse(model=model, attempt=attempt, content=content or "")
             except Exception as exc:  # noqa: BLE001
-                logger.warning("Failed to get response from '%s': %s", model, exc)
-                return model, ""
+                logger.warning("Failed to get response from '%s' (attempt %d): %s", model, attempt + 1, exc)
+                return CollectedResponse(model=model, attempt=attempt, content="", error=str(exc))
 
-        pairs = await asyncio.gather(*[_get(m) for m in models])
-        return dict(pairs)
+        tasks = [_get(model, attempt) for attempt in range(repetitions) for model in models]
+        return list(await asyncio.gather(*tasks))
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
+
+
+def load_quality_prompts(prompts_path: Path) -> list[QualityPrompt]:
+    """Load and validate a generic quality-screen JSON fixture.
+
+    Raises:
+        ValueError: If the fixture is missing required fields, has invalid JSON
+            or does not contain a non-empty list of prompt objects.
+    """
+    try:
+        raw = json.loads(prompts_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"Quality prompts file does not exist: '{prompts_path}'.") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Quality prompts file contains invalid JSON: {exc}") from exc
+
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(f"Quality prompts file '{prompts_path}' must contain a non-empty JSON list.")
+
+    prompts: list[QualityPrompt] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"Quality prompt #{index} must be a JSON object.")
+        try:
+            prompts.append(QualityPrompt.model_validate(item))
+        except ValueError as exc:
+            raise ValueError(f"Quality prompt #{index} is invalid: {exc}") from exc
+    return prompts
+
+
+def quality_suite_id(prompts_path: Path) -> str:
+    """Return a content-addressed ID that ties results to an exact prompt suite."""
+    digest = hashlib.sha256(prompts_path.read_bytes()).hexdigest()[:12]
+    return f"{QUALITY_SUITE_VERSION}-{digest}"
+
+
+def _format_judge_context(judge_criteria: list[str] | None, reference_answer: str | None) -> str:
+    """Format stable, model-blind instructions for an external judge."""
+    criteria = judge_criteria or []
+    criteria_text = "\n".join(f"- {criterion}" for criterion in criteria) or "- Apply the default scoring rubric."
+    reference_text = reference_answer or "No reference answer is supplied."
+    return f"Criteria:\n{criteria_text}\n\nReference answer:\n{reference_text}"
 
 
 def _parse_judge_output(raw: str) -> JudgeOutput:
@@ -435,3 +601,11 @@ def _parse_judge_output(raw: str) -> JudgeOutput:
 def _alias(index: int) -> str:
     """Convert a zero-based index to a letter alias (0 → 'A', 1 → 'B', …)."""
     return chr(ord("A") + index)
+
+
+def _blind_alias_map(model_ids: Iterable[str], *, seed_material: str) -> dict[str, str]:
+    """Return a reproducibly shuffled alias map without preserving input order."""
+    ordered_ids = sorted(str(model_id) for model_id in model_ids)
+    seed = int(hashlib.sha256(seed_material.encode("utf-8")).hexdigest()[:16], 16)
+    random.Random(seed).shuffle(ordered_ids)
+    return {_alias(index): model_id for index, model_id in enumerate(ordered_ids)}

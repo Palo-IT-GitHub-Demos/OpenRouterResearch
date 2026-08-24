@@ -1,27 +1,129 @@
 [
   {
-    "prompt": "Return ONLY valid JSON with no extra text: {\"status\": \"ok\", \"value\": 42}",
+    "prompt": "Return exactly this JSON object, with no markdown or extra text: {\"status\": \"ok\", \"value\": 42}",
     "category": "json_output",
-    "responses": {}
+    "quality_dimension": "structured_output",
+    "expected_json": {"status": "ok", "value": 42},
+    "strict_output": true
   },
   {
-    "prompt": "Write a Python function `add(a: int, b: int) -> int` that returns the sum of two integers. Return only the function definition, no explanation.",
+    "prompt": "Return exactly this JSON object, with no markdown or extra text: {\"fr\": \"bonjour\", \"es\": \"hola\", \"ja\": \"こんにちは\"}",
+    "category": "json_output",
+    "quality_dimension": "structured_output",
+    "expected_json": {"fr": "bonjour", "es": "hola", "ja": "こんにちは"},
+    "strict_output": true
+  },
+  {
+    "prompt": "Return exactly this JSON array, with no markdown or extra text: [\"eu\", \"apac\", \"us\"]",
+    "category": "json_output",
+    "quality_dimension": "structured_output",
+    "expected_json": ["eu", "apac", "us"],
+    "strict_output": true
+  },
+  {
+    "prompt": "Write only a Python function `add(a: int, b: int) -> int` that returns the sum of its two arguments. Do not include markdown or an explanation.",
     "category": "code_generation",
-    "responses": {}
+    "quality_dimension": "code_contract",
+    "required_function": "add",
+    "required_parameters": ["a", "b"],
+    "strict_output": true
   },
   {
-    "prompt": "If all Bloops are Razzles, and all Razzles are Lazzles, are all Bloops definitely Lazzles? Answer with YES or NO followed by a one-sentence explanation.",
+    "prompt": "What is the capital of Australia? Reply with the city name only.",
+    "category": "factual_sanity",
+    "quality_dimension": "factual_sanity",
+    "accepted_answers": ["Canberra"],
+    "strict_output": true
+  },
+  {
+    "prompt": "Who wrote Hamlet? Reply with the author's name only.",
+    "category": "factual_sanity",
+    "quality_dimension": "factual_sanity",
+    "accepted_answers": ["William Shakespeare", "Shakespeare"],
+    "strict_output": true
+  },
+  {
+    "prompt": "What is the largest planet in the Solar System? Reply with the planet name only.",
+    "category": "factual_sanity",
+    "quality_dimension": "factual_sanity",
+    "accepted_answers": ["Jupiter"],
+    "strict_output": true
+  },
+  {
+    "prompt": "What is 17 multiplied by 23? Reply with the number only.",
+    "category": "exact_answer",
+    "quality_dimension": "elementary_reasoning",
+    "accepted_answers": ["391"],
+    "strict_output": true
+  },
+  {
+    "prompt": "All Bloops are Razzles. All Razzles are Lazzles. Are all Bloops Lazzles? Reply only YES or NO.",
     "category": "logical_reasoning",
-    "responses": {}
+    "quality_dimension": "elementary_reasoning",
+    "accepted_answers": ["YES"],
+    "strict_output": true
   },
   {
-    "prompt": "Translate the word 'hello' into French, Spanish, and Japanese. Respond with a JSON object: {\"fr\": \"...\", \"es\": \"...\", \"ja\": \"...\"}",
-    "category": "instruction_following",
-    "responses": {}
+    "prompt": "Complete the sequence 1, 1, 2, 3, 5, ?. Reply with the next number only.",
+    "category": "exact_answer",
+    "quality_dimension": "elementary_reasoning",
+    "accepted_answers": ["8"],
+    "strict_output": true
   },
   {
-    "prompt": "List the first 5 prime numbers separated by commas and nothing else.",
+    "prompt": "List the first five prime numbers, separated by comma and one space, with no other text.",
     "category": "instruction_following",
-    "responses": {}
+    "quality_dimension": "instruction_reliability",
+    "accepted_answers": ["2, 3, 5, 7, 11"],
+    "strict_output": true
+  },
+  {
+    "prompt": "Sort 12, 3, 9, and 1 in ascending order. Reply as comma-separated numbers with one space after each comma and no other text.",
+    "category": "instruction_following",
+    "quality_dimension": "instruction_reliability",
+    "accepted_answers": ["1, 3, 9, 12"],
+    "strict_output": true
+  },
+  {
+    "prompt": "Reply with exactly ALPHA-42 and no other characters.",
+    "category": "instruction_following",
+    "quality_dimension": "instruction_reliability",
+    "accepted_answers": ["ALPHA-42"],
+    "strict_output": true
+  },
+  {
+    "prompt": "An employee says: 'I cannot access my account after a password reset.' Write a helpful response in no more than 50 words.",
+    "category": "generic_judgment",
+    "quality_dimension": "concise_communication",
+    "judge_criteria": [
+      "Acknowledge the access problem empathetically.",
+      "Do not ask the employee to disclose a password or other secret.",
+      "Give at least one safe next step, such as retrying the approved reset flow or contacting support.",
+      "Stay within 50 words and avoid invented account-status claims."
+    ],
+    "reference_answer": "Sorry you are locked out after the reset. Please retry the approved reset link once, then contact the service desk if access is still blocked. Never share your password or verification code."
+  },
+  {
+    "prompt": "Summarize this text in no more than two sentences: 'The release is scheduled for Tuesday. The database migration must finish before deployment. If migration validation fails, the release must be postponed.'",
+    "category": "generic_judgment",
+    "quality_dimension": "concise_communication",
+    "judge_criteria": [
+      "State that the release is scheduled for Tuesday.",
+      "State that migration completion or validation is a deployment prerequisite.",
+      "State that a failed migration validation postpones the release.",
+      "Use no more than two sentences and do not add unsupported facts."
+    ],
+    "reference_answer": "The release is planned for Tuesday, contingent on a completed and validated database migration. A failed migration validation requires postponing the release."
+  },
+  {
+    "prompt": "A stakeholder says: 'Make the report better.' Ask exactly one clarifying question and do not propose a solution yet.",
+    "category": "generic_judgment",
+    "quality_dimension": "instruction_reliability",
+    "judge_criteria": [
+      "Ask exactly one question.",
+      "The question should seek a concrete success criterion such as audience, missing information, or desired decision.",
+      "Do not propose edits, assumptions, or a solution before receiving clarification."
+    ],
+    "reference_answer": "Which audience and decision should the improved report primarily support?"
   }
 ]

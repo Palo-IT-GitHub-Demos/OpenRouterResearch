@@ -1,19 +1,22 @@
-"""Deterministic pre-evaluation layer for the LLM benchmark.
+"""Deterministic pre-evaluation layer for the generic LLM quality screen.
 
-Runs zero-cost, code-based checks before invoking the LLM-Judge.
-If a check can definitively pass or fail a response, the LLM call is skipped —
-saving API cost and latency.
+The screen deliberately measures only provider-neutral fundamentals: structured
+output, factual sanity, elementary reasoning and instruction reliability. It is
+not a substitute for domain-specific task evaluation.
 
-Each concrete class implements the :class:`DeterministicCheck` protocol.
-The module-level ``CHECKS`` registry maps prompt categories to the appropriate
-check instance.
+Checks run in pure Python before any external judge is used. A check either
+produces a definitive pass/fail score or returns ``None`` to route the response
+to the blind Copilot judge panel.
 """
 
 from __future__ import annotations
 
+import ast
 import json
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
@@ -36,8 +39,13 @@ class DeterministicCheck(Protocol):
 
     category: str
 
-    def run(self, prompt: str, response: str) -> CheckResult:
-        """Evaluate *response* against *prompt* deterministically."""
+    def run(
+        self,
+        prompt: str,
+        response: str,
+        evaluation: Mapping[str, Any] | None = None,
+    ) -> CheckResult:
+        """Evaluate *response* against *prompt* and optional metadata."""
         ...
 
 
@@ -45,18 +53,42 @@ class DeterministicCheck(Protocol):
 
 
 class JsonValidityCheck:
-    """Verify that the model's response is syntactically valid JSON."""
+    """Verify JSON syntax and, when configured, exact JSON content."""
 
     category = "json_output"
 
-    def run(self, prompt: str, response: str) -> CheckResult:
+    def run(
+        self,
+        prompt: str,
+        response: str,
+        evaluation: Mapping[str, Any] | None = None,
+    ) -> CheckResult:
+        """Evaluate JSON output without accepting markdown when output is strict."""
+        del prompt
         content = _strip_code_fences(response)
+        if _is_strict_output(evaluation) and content != response.strip():
+            return CheckResult(
+                passed=False,
+                score=1,
+                reason="Response must contain raw JSON only, without markdown fences or extra text.",
+            )
         try:
-            json.loads(content)
+            parsed = json.loads(content)
+            expected_json = _get_context_value(evaluation, "expected_json")
+            if expected_json is not None and parsed != expected_json:
+                return CheckResult(
+                    passed=False,
+                    score=1,
+                    reason="Response is valid JSON but does not match the required JSON value.",
+                )
             return CheckResult(
                 passed=True,
                 score=5,
-                reason="Response is syntactically valid JSON.",
+                reason=(
+                    "Response is valid JSON and matches the required JSON value."
+                    if expected_json is not None
+                    else "Response is syntactically valid JSON."
+                ),
             )
         except json.JSONDecodeError as exc:
             return CheckResult(
@@ -67,19 +99,33 @@ class JsonValidityCheck:
 
 
 class PythonSyntaxCheck:
-    """Verify that the model's response is syntactically valid Python."""
+    """Verify Python syntax and an optional, non-executed function contract."""
 
     category = "code_generation"
 
-    def run(self, prompt: str, response: str) -> CheckResult:
+    def run(
+        self,
+        prompt: str,
+        response: str,
+        evaluation: Mapping[str, Any] | None = None,
+    ) -> CheckResult:
+        """Check syntax and function shape without executing untrusted code."""
+        del prompt
         code = _strip_code_fences(response)
-        try:
-            compile(code, "<model-response>", "exec")
+        if not code:
             return CheckResult(
-                passed=True,
-                score=5,
-                reason="Response contains syntactically valid Python.",
+                passed=False,
+                score=1,
+                reason="Response is empty; expected Python source code.",
             )
+        if _is_strict_output(evaluation) and code != response.strip():
+            return CheckResult(
+                passed=False,
+                score=1,
+                reason="Response must contain raw Python only, without markdown fences or extra text.",
+            )
+        try:
+            tree = ast.parse(code, filename="<model-response>", mode="exec")
         except SyntaxError as exc:
             return CheckResult(
                 passed=False,
@@ -87,22 +133,91 @@ class PythonSyntaxCheck:
                 reason=f"Python SyntaxError: {exc.msg} (line {exc.lineno}).",
             )
 
+        required_function = _get_context_str(evaluation, "required_function")
+        required_parameters = _get_context_strings(evaluation, "required_parameters")
+        if required_function is None:
+            return CheckResult(
+                passed=True,
+                score=5,
+                reason="Response contains syntactically valid Python.",
+            )
+
+        function = next(
+            (node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == required_function),
+            None,
+        )
+        if function is None:
+            return CheckResult(
+                passed=False,
+                score=1,
+                reason=f"Required function '{required_function}' was not found.",
+            )
+
+        actual_parameters = [arg.arg for arg in (*function.args.posonlyargs, *function.args.args)]
+        if required_parameters and actual_parameters != required_parameters:
+            return CheckResult(
+                passed=False,
+                score=1,
+                reason=(
+                    f"Function '{required_function}' parameters must be "
+                    f"{required_parameters}, got {actual_parameters}."
+                ),
+            )
+
+        return CheckResult(
+            passed=True,
+            score=5,
+            reason=f"Response satisfies the '{required_function}' Python function contract.",
+        )
+
 
 class ExactFormatCheck:
-    """Placeholder for instruction-following checks.
+    """Evaluate exact output when accepted answers are supplied.
 
-    Generic instruction prompts require LLM judgement — this check always
-    returns undecidable so the LLM-Judge is invoked.
+    Without reference answers, the response remains undecidable and is sent to
+    the blind judge panel. This preserves support for open-ended prompts.
     """
 
     category = "instruction_following"
 
-    def run(self, prompt: str, response: str) -> CheckResult:
+    def run(
+        self,
+        prompt: str,
+        response: str,
+        evaluation: Mapping[str, Any] | None = None,
+    ) -> CheckResult:
+        """Compare a response to normalized accepted answers when available."""
+        del prompt
+        accepted_answers = _get_context_strings(evaluation, "accepted_answers")
+        if accepted_answers:
+            if _is_strict_output(evaluation):
+                matches = response.strip() in {answer.strip() for answer in accepted_answers}
+            else:
+                normalized_response = _normalize_exact_text(response)
+                normalized_answers = {_normalize_exact_text(answer) for answer in accepted_answers}
+                matches = normalized_response in normalized_answers
+            if matches:
+                return CheckResult(
+                    passed=True,
+                    score=5,
+                    reason="Response matches an accepted answer.",
+                )
+            return CheckResult(
+                passed=False,
+                score=1,
+                reason="Response does not match any accepted answer exactly.",
+            )
         return CheckResult(
             passed=None,
             score=None,
             reason="Instruction-following format requires LLM judgement.",
         )
+
+
+class ExactAnswerCheck(ExactFormatCheck):
+    """Exact-answer check for factual-sanity and elementary-reasoning probes."""
+
+    category = "exact_answer"
 
 
 # ── Registry ───────────────────────────────────────────────────────────────────
@@ -111,6 +226,9 @@ CHECKS: dict[str, DeterministicCheck] = {
     "json_output": JsonValidityCheck(),
     "code_generation": PythonSyntaxCheck(),
     "instruction_following": ExactFormatCheck(),
+    "exact_answer": ExactAnswerCheck(),
+    "factual_sanity": ExactAnswerCheck(),
+    "logical_reasoning": ExactAnswerCheck(),
 }
 
 
@@ -125,3 +243,32 @@ def _strip_code_fences(text: str) -> str:
     if lines and lines[-1].strip() == "```":
         lines = lines[:-1]
     return "\n".join(lines).strip()
+
+
+def _get_context_value(evaluation: Mapping[str, Any] | None, key: str) -> Any | None:
+    """Return a metadata value when *evaluation* is available."""
+    return evaluation.get(key) if evaluation is not None else None
+
+
+def _get_context_str(evaluation: Mapping[str, Any] | None, key: str) -> str | None:
+    """Return a string metadata value, otherwise ``None``."""
+    value = _get_context_value(evaluation, key)
+    return value if isinstance(value, str) else None
+
+
+def _get_context_strings(evaluation: Mapping[str, Any] | None, key: str) -> list[str]:
+    """Return a validated list of string metadata values."""
+    value = _get_context_value(evaluation, key)
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return []
+    return value
+
+
+def _is_strict_output(evaluation: Mapping[str, Any] | None) -> bool:
+    """Return whether the response must not include markdown or extra text."""
+    return _get_context_value(evaluation, "strict_output") is True
+
+
+def _normalize_exact_text(value: str) -> str:
+    """Normalize whitespace and casing while preserving meaningful punctuation."""
+    return re.sub(r"\s+", " ", value.strip()).casefold()
