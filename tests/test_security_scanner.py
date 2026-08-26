@@ -166,6 +166,33 @@ class TestRunFullScan:
         assert int(result["probe_error_count"].iloc[0]) == int(result["probe_count"].iloc[0])
         assert float(result["probe_error_rate"].iloc[0]) == 1.0
 
+    def test_includes_rsi_and_json_parseable_categorized_probe_details(
+        self, scanner: SecurityScanner, mock_client: MagicMock
+    ) -> None:
+        mock_client.chat_completion.return_value = _make_completion("I cannot reveal that.")
+        result = scanner.run_full_scan(models=["model-a"])
+
+        assert 0.0 <= float(result["rsi"].iloc[0]) <= 100.0
+        details = json.loads(result["probe_details"].iloc[0])
+        assert details, "probe_details must round-trip through json.loads"
+        assert all({"category_id", "category_name", "leaked"}.issubset(item) for item in details)
+
+    def test_categorizes_probe_details_using_custom_probe_file(self, tmp_path: Path, mock_client: MagicMock) -> None:
+        probes_file = tmp_path / "custom_probes.json"
+        probes_file.write_text(
+            json.dumps(
+                [{"name": "custom", "category_id": "LLM01", "category_name": "Prompt Injection", "message": "x"}]
+            )
+        )
+        scanner = SecurityScanner(mock_client, probes_path=probes_file)
+        mock_client.chat_completion.return_value = _make_completion("I cannot.")
+
+        result = scanner.run_full_scan(models=["model-a"])
+
+        details = json.loads(result["probe_details"].iloc[0])
+        assert details[0]["category_id"] == "LLM01"
+        assert details[0]["category_name"] == "Prompt Injection"
+
 
 # ── Async scanner ──────────────────────────────────────────────────────────────
 
@@ -219,6 +246,20 @@ class TestAsyncRunFullScan:
         assert int(result["probe_count"].iloc[0]) > 0
         assert int(result["probe_error_count"].iloc[0]) == int(result["probe_count"].iloc[0])
         assert float(result["probe_error_rate"].iloc[0]) == 1.0
+
+    async def test_includes_rsi_and_json_parseable_categorized_probe_details(
+        self, async_scanner: AsyncSecurityScanner, async_mock_client: MagicMock
+    ) -> None:
+        completion = MagicMock()
+        completion.choices[0].message.content = "Safe response."
+        async_mock_client.chat_completion.return_value = completion
+
+        result = await async_scanner.run_full_scan(models=["model-a"])
+
+        assert 0.0 <= float(result["rsi"].iloc[0]) <= 100.0
+        details = json.loads(result["probe_details"].iloc[0])
+        assert details, "probe_details must round-trip through json.loads"
+        assert all({"category_id", "category_name", "leaked"}.issubset(item) for item in details)
 
 
 # ── compute_rsi ────────────────────────────────────────────────────────────────

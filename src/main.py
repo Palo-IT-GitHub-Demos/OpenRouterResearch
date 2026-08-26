@@ -16,7 +16,7 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pandas as pd
 
@@ -392,7 +392,7 @@ def _merge_results(
         base = base.merge(summarize_actual_call_costs(actual_call_costs), on="model", how="left")
 
     if not security_df.empty:
-        _wanted = ["model", "leak_count", "is_vulnerable", "zero_data_retention"]
+        _wanted = ["model", "leak_count", "is_vulnerable", "zero_data_retention", "rsi", "probe_details"]
         sec_cols = [c for c in _wanted if c in security_df.columns]
         base = base.merge(security_df[sec_cols], on="model", how="left")
 
@@ -1216,6 +1216,98 @@ class DryRunPipeline(CollectPipeline):
         return result
 
 
+# ── Verify: real, zero-cost preflight (auth + live model catalog) ─────────────
+
+
+def _format_credit_summary(key_info: dict[str, Any]) -> str:
+    """Render OpenRouter's ``GET /key`` payload as a human-readable one-liner."""
+    label = key_info.get("label") or "(unlabelled key)"
+    usage = key_info.get("usage")
+    limit = key_info.get("limit")
+    limit_remaining = key_info.get("limit_remaining")
+    is_free_tier = key_info.get("is_free_tier")
+
+    parts = [f"key='{label}'"]
+    if isinstance(usage, int | float):
+        parts.append(f"lifetime usage={usage:.4f} credits")
+    if limit is None:
+        parts.append("no per-key spend limit")
+    elif isinstance(limit_remaining, int | float):
+        parts.append(f"limit_remaining={limit_remaining:.4f}/{limit:.4f} credits")
+    if is_free_tier is not None:
+        parts.append(f"is_free_tier={is_free_tier}")
+    return ", ".join(parts)
+
+
+class VerifyPipeline:
+    """Real but zero-cost preflight — validates the API key and TARGET_MODELS
+    against the live OpenRouter catalog without a single chat completion.
+
+    Sits between :class:`DryRunPipeline` (fully offline, fake data) and
+    :class:`CollectPipeline` (real, full-cost run). Both ``GET /key`` and
+    ``GET /models`` are metadata-only endpoints that OpenRouter does not bill,
+    so this can be re-run as often as needed right before a costly
+    ``make collect``. Unlike ``CollectPipeline``, failures here raise
+    immediately instead of degrading gracefully — the whole point is to stop
+    *before* spending budget, not to salvage a partial run.
+
+    Uses a :class:`CollectPipeline` instance purely to reuse its
+    ``_run_cost_stage`` (real pricing fetch); composition rather than
+    inheritance keeps ``run()``'s return type independent of
+    ``CollectPipeline.run()``'s.
+    """
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self._settings = settings or get_settings()
+        self._collector = CollectPipeline(self._settings)
+
+    async def run(self) -> None:
+        settings = self._settings
+        models = settings.target_models_list
+
+        _run_preflight_checks(settings)
+
+        async with AsyncOpenRouterClient(settings) as client:
+            try:
+                key_info = await client.get_key_info()
+            except OpenRouterError as exc:
+                raise ValueError(f"[VERIFY] \u274c API key check failed: {exc}") from exc
+
+            pricing_df = await self._collector._run_cost_stage(client)
+
+        logger.info("[VERIFY] \u2705 API key accepted \u2014 %s", _format_credit_summary(key_info))
+
+        if pricing_df.empty:
+            raise ValueError(
+                "[VERIFY] \u274c Could not fetch the live model catalog (GET /models) — "
+                "check network connectivity and try again."
+            )
+
+        unknown_models = _unknown_target_models(models, pricing_df)
+        if unknown_models:
+            raise ValueError(
+                f"[VERIFY] \u274c {len(unknown_models)} model ID(s) in TARGET_MODELS are not in "
+                f"the live OpenRouter catalog: {unknown_models}. Check https://openrouter.ai/models "
+                "for the current slug — every call to them would fail during 'make collect'."
+            )
+        logger.info("[VERIFY] \u2705 All %d TARGET_MODELS entries resolve in the live catalog.", len(models))
+
+        prompt_count, _dim_count, _suite_id = _quality_screen_metadata(_QUALITY_PROMPTS)
+        probes_path = Path(settings.security_probes_path) if settings.security_probes_path else None
+        estimated_requests = _estimate_free_tier_request_volume(
+            models,
+            quality_prompt_count=prompt_count or 0,
+            quality_repetitions=settings.quality_repetitions,
+            security_probe_count=_security_probe_count_for_estimate(probes_path),
+        )
+        _warn_on_free_tier_request_volume(estimated_requests)
+
+        logger.info("=" * 70)
+        logger.info("[VERIFY] \u2705 Ready for a real run — key valid, models known, $0 spent so far.")
+        logger.info("[VERIFY]   make collect   (Phase 1 — real OpenRouter calls)")
+        logger.info("=" * 70)
+
+
 def main() -> None:
     try:
         subcommand = sys.argv[1] if len(sys.argv) > 1 else "collect"
@@ -1228,9 +1320,11 @@ def main() -> None:
         elif subcommand in ("dry-run", "dryrun"):
             result = asyncio.run(DryRunPipeline().run())
             print(result.to_string(index=False))
+        elif subcommand == "verify":
+            asyncio.run(VerifyPipeline().run())
         else:
             logger.error(
-                "Unknown subcommand '%s'. Usage: python -m src.main " "[collect|merge|dry-run]",
+                "Unknown subcommand '%s'. Usage: python -m src.main " "[collect|merge|dry-run|verify]",
                 subcommand,
             )
             sys.exit(1)

@@ -168,6 +168,28 @@ class TestMergeResults:
         assert pd.isna(model_b["actual_cost_credits"])
         assert model_a["tco_usd"] > model_a["actual_cost_credits"]
 
+    def test_merges_rsi_and_probe_details_from_security_df(self) -> None:
+        security_df = pd.DataFrame(
+            [
+                {
+                    "model": "model-a",
+                    "leak_count": 1,
+                    "is_vulnerable": True,
+                    "zero_data_retention": False,
+                    "rsi": 82.5,
+                    "probe_details": json.dumps([{"category_id": "LLM01", "leaked": True}]),
+                }
+            ]
+        )
+
+        result = _merge_results(["model-a", "model-b"], _pricing(), _quality_rows(), security_df)
+
+        model_a = result.loc[result["model"] == "model-a"].iloc[0]
+        model_b = result.loc[result["model"] == "model-b"].iloc[0]
+        assert model_a["rsi"] == pytest.approx(82.5)
+        assert json.loads(model_a["probe_details"])[0]["category_id"] == "LLM01"
+        assert pd.isna(model_b["rsi"])
+
 
 class TestRebuildQualityDataframe:
     def test_keeps_attempts_separate_when_merging_judges(self, tmp_path: Path) -> None:

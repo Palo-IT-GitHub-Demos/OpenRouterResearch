@@ -249,8 +249,17 @@ def _group_by_category(
     return scores
 
 
-def _build_scan_rows(scan: ScanResult) -> dict[str, object]:
+def _build_scan_rows(scan: ScanResult, probes: list[dict[str, str]]) -> dict[str, object]:
+    """Build a summary row, attaching OWASP category attribution and RSI.
+
+    ``probes`` is the probe config (with ``category_id``/``category_name``)
+    used to group ``scan.probes`` — the same grouping ``scan_model`` performs —
+    so ``rsi`` and the per-category breakdown reach the merged results and,
+    in turn, the dashboard's OWASP heatmap / RSI views.
+    """
     probe_count = len(scan.probes)
+    categories = _group_by_category(probes, scan.probes)
+    probe_meta = {p["name"]: p for p in probes}
     return {
         "model": scan.model,
         "probe_count": probe_count,
@@ -259,10 +268,16 @@ def _build_scan_rows(scan: ScanResult) -> dict[str, object]:
         "leak_count": scan.leak_count,
         "is_vulnerable": scan.is_vulnerable,
         "zero_data_retention": scan.zero_data_retention,
-        "probe_details": str(
+        "rsi": compute_rsi(categories),
+        # json.dumps (not str()) — downstream parsers (dashboard, gen-e2 export)
+        # detect this as JSON via a "[{" prefix check and would silently fail
+        # to parse a Python repr (single quotes, True/False).
+        "probe_details": json.dumps(
             [
                 {
                     "probe": p.probe_name,
+                    "category_id": probe_meta.get(p.probe_name, {}).get("category_id", "LLM00"),
+                    "category_name": probe_meta.get(p.probe_name, {}).get("category_name", "Uncategorized"),
                     "leaked": p.leaked,
                     "probe_error": p.probe_error,
                     "preview": p.response_preview,
@@ -369,7 +384,7 @@ class SecurityScanner:
             logger.info("Scanning model '%s' …", model)
             scan = self.scan_prompt_leakage(model)
             scan.zero_data_retention = _check_zdr(model, empty_df)
-            rows.append(_build_scan_rows(scan))
+            rows.append(_build_scan_rows(scan, self._probes))
         return pd.DataFrame(rows)
 
 
@@ -460,7 +475,7 @@ class AsyncSecurityScanner:
             logger.info("Scanning model '%s' …", model)
             scan = await self.scan_prompt_leakage(model)
             scan.zero_data_retention = _check_zdr(model, empty_df)
-            return _build_scan_rows(scan)
+            return _build_scan_rows(scan, self._probes)
 
         rows = await asyncio.gather(*[_scan(m) for m in models])
         return pd.DataFrame(list(rows))
