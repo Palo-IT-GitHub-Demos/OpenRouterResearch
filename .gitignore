@@ -13,6 +13,7 @@ mlruns/
 mlruns.db
 results/*.csv
 results/*.json
+results/call_costs/
 data/intermediate/*.json
 data/dry_run/
 site/
