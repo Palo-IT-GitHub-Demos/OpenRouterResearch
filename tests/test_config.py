@@ -25,13 +25,11 @@ class TestSettingsValidation:
         )
         assert s.target_models_list == ["model-x", "model-y"]
 
-    def test_default_target_models_are_free(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("TARGET_MODELS", raising=False)
-        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
-        get_settings.cache_clear()
-        s = get_settings()
+    def test_default_target_models_are_free(self) -> None:
+        # _env_file=None isolates from the repo's real .env (which may list paid
+        # models) — this test targets the Settings field default, not .env content.
+        s = Settings(openrouter_api_key="sk-test", _env_file=None)  # type: ignore[call-arg]
         assert all(":free" in m for m in s.target_models_list)
-        get_settings.cache_clear()
 
     def test_missing_api_key_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
