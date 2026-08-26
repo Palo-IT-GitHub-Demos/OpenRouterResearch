@@ -1,13 +1,19 @@
 # Manager Brief - OpenRouter Research Progress
 
+> **Statut du document :** support de pilotage daté, destiné au suivi de projet
+> et à la préparation des échanges. Ce brief n'est pas une source normative de
+> la documentation technique ; le [workflow](workflow.md), les ADR et le code
+> courant font foi pour le fonctionnement du projet.
+
 Date: 2026-08-18 (updated — see revision note at the end)
 
 ## 0. What This Project Is (Plain-English Primer)
 
-This repository ("open-router-research") automatically benchmarks Large Language
-Models (LLMs) available through the [OpenRouter](https://openrouter.ai/) API
-aggregator, so we can build a **shortlist** before doing a deeper, business-specific
-evaluation in the sister project `gen-e2-eval`. Full pitch and positioning vs.
+This repository ("open-router-research") performs a comparative **screening** of
+Large Language Models (LLMs) available through the
+[OpenRouter](https://openrouter.ai/) API aggregator, so we can build a
+**shortlist** before doing a deeper, business-specific evaluation in the sister
+project `gen-e2-eval`. Full pitch and positioning vs.
 `gen-e2-eval`: [README.md](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/README.md) and [docs/index.md](index.md).
 
 It scores every model on **three axes**, computed by three independent modules:
@@ -17,6 +23,10 @@ It scores every model on **three axes**, computed by three independent modules:
 | Quality | Generic pre-screen (not a business benchmark) | [src/evaluators/quality_judge.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/evaluators/quality_judge.py) | `avg_quality_score`, `quality_coverage_rate` |
 | Security | Prompt-injection / OWASP LLM Top 10 red-teaming | [src/evaluators/security_scanner.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/evaluators/security_scanner.py) | `rsi`, `leak_count`, `zero_data_retention` |
 | Cost | Live pricing + projected TCO + real per-call cost | [src/evaluators/cost_analyzer.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/evaluators/cost_analyzer.py) | `tco_usd`, `actual_cost_credits`, `cer` |
+
+The output is a shortlist signal, not a final model recommendation. This
+repository does not evaluate client workflows, golden datasets or functional
+success criteria; those decisions belong to `gen-e2-eval`.
 
 The pipeline runs in **3 phases**, orchestrated by [src/main.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/main.py)
 and driven by `make` targets defined in [Makefile](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/Makefile):
@@ -31,6 +41,8 @@ and driven by `make` targets defined in [Makefile](https://github.com/Palo-IT-Gi
 3. **`make merge`** — averages the 3 judges' scores, merges in pricing + security
    results, and exports the final `results/benchmark_<timestamp>.{csv,json}`.
 
+The coordinator owns workspace file access: judges return JSON only, while the
+coordinator validates and writes the three `scores_{timestamp}_*.json` files.
 The full step-by-step, including configuration variables and metric definitions,
 is documented in [docs/workflow.md](workflow.md). A local dashboard
 (`streamlit run dashboard/app.py`, code in [dashboard/app.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/dashboard/app.py))
@@ -53,8 +65,8 @@ and the security scanner was extended toward full OWASP LLM Top 10 coverage
 status "In progress").
 
 The pipeline runs, exports are generated, and the engineering baseline is stable.
-Current test status is strong: **155/155 tests passing** (`tests/`, run via
-`make test`, up from 147 in the previous brief).
+Run `make test` to verify the current test suite; the count is intentionally not
+duplicated here because it changes as the pipeline evolves.
 
 > Note: the working tree currently has substantial uncommitted changes across
 > `src/`, `dashboard/`, and `docs/` (in-progress engineering work not yet
@@ -66,7 +78,8 @@ Current test status is strong: **155/155 tests passing** (`tests/`, run via
 - A 3-phase benchmark pipeline (see [src/main.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/main.py) and
   [Makefile](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/Makefile) targets `collect` / `judge` / `merge`):
   - Phase 1: collect responses + deterministic checks + security scan
-  - Phase 2: blind judging via 3 Copilot agents (only for undecidable prompts)
+  - Phase 2: coordinator passes the anonymised batch to 3 Copilot agents in
+    parallel and writes their validated JSON outputs (only for undecidable prompts)
   - Phase 3: merge scores and export final results to `results/`
 - A Streamlit dashboard for quality-cost-security comparison
   ([dashboard/app.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/dashboard/app.py), [dashboard/pareto.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/dashboard/pareto.py))

@@ -1,6 +1,6 @@
 # open-router-research — LLM Evaluation Pipeline (LLMOps)
 
-> Automated, scalable benchmarking of large language models available on
+> Automated, scalable screening of large language models available on
 > [OpenRouter](https://openrouter.ai/) across three critical axes: **Quality**,
 > **Cost**, and **Security**.
 >
@@ -10,10 +10,25 @@
 
 ## Overview
 
-This pipeline evaluates LLMs available through the OpenRouter API aggregator and
-produces a ranked comparison matrix. Results are exported as CSV/JSON and
-visualised in a local Streamlit dashboard with a **Pareto frontier** overlay
-(best quality-to-cost trade-off).
+This pipeline screens LLMs available through the OpenRouter API aggregator and
+produces a comparison matrix for building a shortlist. Results are exported as
+CSV/JSON and visualised in a local Streamlit dashboard with a **Pareto
+frontier** overlay (best quality-to-cost trade-off).
+
+It is a cross-provider screening tool, not a business benchmark. It measures
+generic quality fundamentals together with cost, latency and security to reduce
+the number of models to evaluate in the sister project
+[`gen-e2-eval`](https://github.com/GLOBAL-PALO-IT/gen-e2-eval).
+
+### Scope boundary
+
+OpenRouter Research answers: **"Which models are worth evaluating further?"**
+
+It does not answer: **"Which model is best for this specific business
+workflow?"** That decision belongs to `gen-e2-eval`, using client-specific
+tasks, reference data and functional evaluation. A result from this repository
+must therefore be treated as a shortlist signal, never as a final adoption
+recommendation.
 
 ### Evaluation axes
 
@@ -47,7 +62,7 @@ dashboard/
 └── app.py                     # Streamlit scatter plot dashboard
 
 data/prompts/
-├── quality_prompts.json       # Benchmark prompts (JSON output, code gen, reasoning…)
+├── quality_prompts.json       # Generic screening prompts (JSON, code, reasoning…)
 ├── security_prompts.json      # 5 baseline injection probes
 └── extended_probes.json       # 15 advanced red-team probes (JailbreakBench-style)
 
@@ -110,10 +125,28 @@ pre-commit install
 cp .env.example .env
 # Edit .env — minimum required:
 #   OPENROUTER_API_KEY=sk-or-...
-#   TARGET_MODELS=anthropic/claude-3.5-sonnet,openai/gpt-4o-mini
+#   TARGET_MODELS=anthropic/claude-sonnet-5,openai/gpt-4o-mini
 ```
 
-### 4. Run the benchmark
+> Model slugs on OpenRouter change over time (renames, deprecations). Run
+> `make verify` after editing `TARGET_MODELS` — it checks every entry against
+> the live catalog for free, before any paid call is made.
+
+### 4. Verify before spending anything
+
+Two preflight checks, both **$0**, run in this order before a paid `make collect`:
+
+```bash
+make dry-run   # 100% offline — fake client, validates config/prompts/probes shape
+make verify    # real network — GET /key + GET /models, validates the API key and
+               # every TARGET_MODELS entry against the live catalog (no chat completions)
+```
+
+`make verify` fails fast (non-zero exit) on an invalid/expired key or an unknown model
+slug — exactly the two mistakes that would otherwise only surface mid-way through a
+paid `make collect`.
+
+### 5. Run the benchmark
 
 ```bash
 make collect
@@ -125,9 +158,16 @@ In VS Code Copilot chat, invoke the judge coordinator:
 
 ```text
 @judge-coordinator
-# Phase 2 — delegates to @judge-anthropic, @judge-openai, @judge-google in parallel.
-# Each judge only sees anonymised aliases (A, B, C…) — blind evaluation.
+# Phase 2 — reads judging_<ts>.json and delegates the same anonymised batch
+# to @judge-anthropic, @judge-openai, and @judge-google in parallel.
+# Judges return JSON only; the coordinator validates and writes scores_<ts>_*.json.
+# Each judge sees aliases (A, B, C…) only — blind evaluation.
 ```
+
+The coordinator must confirm that all three score files were created and
+validated before you run `make merge`. If a judge cannot return a valid payload,
+do not merge; retry Phase 2 instead. The coordinator never substitutes
+synthetic scores for a failed judge.
 
 ```bash
 make merge
@@ -135,7 +175,7 @@ make merge
 # exports results/benchmark_<timestamp>.{csv,json}. MLflow run recorded in ./mlruns/
 ```
 
-### 5. Open the dashboard
+### 6. Open the dashboard
 
 ```bash
 streamlit run dashboard/app.py
@@ -176,6 +216,8 @@ number of easy formatting prompts cannot dominate the result. Read it together w
 
 The cost-efficiency ratio (`cer`) is withheld when the result does not cover the required dimensions.
 Use `gen-e2-eval` after this filter to measure success against a client-specific golden dataset.
+See [docs/quality-methodology.md](docs/quality-methodology.md) for prompt provenance, coverage
+limits, the validation protocol and the comparison procedure with `gen-e2-eval`.
 
 ### Actual cost versus TCO projection
 
@@ -186,6 +228,15 @@ Use `gen-e2-eval` after this filter to measure success against a client-specific
   pricing snapshot from `/models`; it is not the charge for the current benchmark run.
 - Calls issued by Copilot judge agents are outside OpenRouter and therefore are not present in the
   OpenRouter call-cost ledger.
+
+### Troubleshooting first runs
+
+| Symptom | Likely cause | Fix |
+| --- | --- | --- |
+| `make verify` fails with "API key check failed" / HTTP 401 | `OPENROUTER_API_KEY` in `.env` is missing, wrong, or the shell has a stale exported env var overriding `.env` | Check `openrouter.ai/keys`; run `env \| grep OPENROUTER_API_KEY` — if it's set in the shell, `unset OPENROUTER_API_KEY` so `.env` takes effect again |
+| `make verify` lists model ID(s) "not in the live OpenRouter catalog" | Typo or a discontinued/renamed `:free` slug in `TARGET_MODELS` | Check [openrouter.ai/models](https://openrouter.ai/models) for the current slug |
+| `make collect` warns about the free-tier request cap | `TARGET_MODELS` uses `:free` models and the account has < 10 USD lifetime credits | Buy ≥ 10 USD credits (raises the cap from 50 to 1000 req/day) or reduce `TARGET_MODELS` / `QUALITY_REPETITIONS` |
+| `make merge` errors with "Missing Copilot judge scores" | `@judge-coordinator` (Phase 2) was never run, or was run before the current `make collect` | Run `@judge-coordinator` in Copilot chat against the latest `data/intermediate/judging_*.json`, then retry `make merge` |
 
 ---
 

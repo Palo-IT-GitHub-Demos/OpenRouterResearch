@@ -103,6 +103,8 @@ flowchart TD
     `:free`, même si l'objectif est de rester à 0 USD de coût réel.
 
 ```bash
+make dry-run   # Pré-vol $0 — offline, valide la forme de la config/prompts/probes
+make verify    # Pré-vol $0 — réseau réel, valide la clé API + TARGET_MODELS
 make collect   # Phase 1
 # Puis dans Copilot chat : @judge-coordinator   (Phase 2)
 make merge     # Phase 3
@@ -201,7 +203,12 @@ Pour chaque prompt :
 
 ### Phase 2 — `@judge-coordinator` (Copilot chat)
 
-Invoque **en parallèle** :
+Le coordinateur lit `judging_{ts}.json`, puis transmet exactement le même
+tableau `pending_judgments` aux trois juges. Les juges n'ont pas besoin d'outils
+workspace : ils retournent uniquement leur payload JSON au coordinateur, qui le
+valide et écrit les fichiers.
+
+Les trois évaluations sont invoquées **en parallèle** :
 
 | Agent | Modèle | Sortie |
 |---|---|---|
@@ -211,6 +218,12 @@ Invoque **en parallèle** :
 
 Chaque agent reçoit uniquement les réponses aliasées (sans identité modèle),
 les critères de jugement explicites et une réponse de référence.
+
+Le coordinateur refuse un résultat si le JSON est invalide, si un alias ou un
+prompt est absent, si un score n'est pas compris entre 1 et 5, ou si la réponse
+contient un marqueur synthétique/dry-run. Il ne remplace jamais un juge absent
+par un score inventé. Lance `make merge` uniquement après confirmation des trois
+fichiers `scores_{ts}_*.json`.
 
 ### Métriques de qualité exportées
 
@@ -387,6 +400,11 @@ Un modèle gratuit a `actual_cost_credits = 0` **et** `actual_cost_coverage_rate
 ## 11. Commandes de référence
 
 ```bash
+# Vérification avant un run payant (les deux sont gratuites, $0)
+make dry-run       # 100% offline — client fake, valide la forme config/prompts/probes
+make verify        # réseau réel — GET /key + GET /models, valide la clé API et
+                   # chaque entrée TARGET_MODELS contre le catalogue live (aucune completion)
+
 # Pipeline standard
 make collect
 # → Copilot chat : @judge-coordinator
@@ -403,9 +421,6 @@ WORKLOAD_PROFILE=code_assistant make merge
 
 # Export gen-e2-eval
 make export-gen-e2
-
-# Simulation offline complète (sans clé API)
-make dry-run
 
 # Dashboard
 make dashboard
@@ -557,7 +572,9 @@ Les réponses indécidables sont écrites dans **deux** fichiers :
 
 ### Phase 2 — `@judge-coordinator` (Copilot chat, aucun coût API OpenRouter)
 
-Le coordinateur invoque **en parallèle** (même tour, 3 appels `runSubagent`) :
+Le coordinateur lit `judging_{ts}.json`, transmet le même tableau
+`pending_judgments` aux trois juges, puis invoque **en parallèle** (même tour,
+3 appels `runSubagent`) :
 
 | Agent | Modèle | Sortie |
 |---|---|---|
@@ -566,10 +583,15 @@ Le coordinateur invoque **en parallèle** (même tour, 3 appels `runSubagent`) :
 | `@judge-google` | Gemini 2.5 Pro | `scores_{ts}_google.json` |
 
 Chaque agent :
-- Lit `judging_{ts}.json` (alias uniquement, pas d'ID modèle)
+- Reçoit `pending_judgments` directement (alias uniquement, pas d'ID modèle)
 - Applique la rubrique anti-biais : pas de favoritisme verbosité/position
-- Exige un raisonnement Chain-of-Thought (3-5 phrases) avant le score
+- Retourne un raisonnement concis et factuel avant chaque score
 - Évalue **tous** les modèles — évaluation en aveugle, pas de récusation nécessaire
+
+Le coordinateur valide les trois réponses et écrit lui-même les fichiers
+`scores_{ts}_anthropic.json`, `scores_{ts}_openai.json` et
+`scores_{ts}_google.json`. En cas de réponse absente ou invalide, il bloque la
+Phase 2 et ne produit pas de score synthétique.
 
 ### Fichier de prompts
 

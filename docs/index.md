@@ -1,8 +1,10 @@
 # OpenRouter Research
 
-Pipeline de **pré-sélection générique** des modèles disponibles sur OpenRouter,
-calibrée pour aider à constituer une shortlist avant une évaluation métier
-dans [gen-e2-eval](https://github.com/GLOBAL-PALO-IT/gen-e2-eval).
+Pipeline de **screening comparatif et reproductible** des modèles disponibles
+sur OpenRouter. Elle réduit l'espace de recherche en comparant les modèles sur
+des critères transverses de qualité générique, de coût, de latence et de
+sécurité, afin de constituer une shortlist avant l'évaluation métier dans
+[gen-e2-eval](https://github.com/GLOBAL-PALO-IT/gen-e2-eval).
 
 ## Trois axes de mesure
 
@@ -16,8 +18,9 @@ dans [gen-e2-eval](https://github.com/GLOBAL-PALO-IT/gen-e2-eval).
 
 - **Exécuter une évaluation** : suivre le [workflow du pipeline](workflow.md),
   de la configuration au tableau de bord.
-- **Préparer un brief de pilotage** : utiliser le [brief manager](brief-manager-2026-08-17.md)
-  comme support de point d'avancement.
+- **Défendre ou auditer le score qualité** : consulter la
+  [méthodologie qualité](quality-methodology.md) — provenance des prompts,
+  couverture, validation et comparaison avec `gen-e2-eval`.
 - **Comprendre le code** : consulter la [référence API Python](reference/api.md),
   générée directement depuis les docstrings du projet.
 - **Comprendre les décisions** : lire les [Architecture Decision Records](adr/0001-architecture-initiale.md).
@@ -26,7 +29,10 @@ dans [gen-e2-eval](https://github.com/GLOBAL-PALO-IT/gen-e2-eval).
 
 ## Positionnement par rapport à gen-e2-eval
 
-```
+Les deux projets répondent à des questions différentes et ne produisent pas
+le même type de décision :
+
+```text
 OpenRouter Research          gen-e2-eval
 ──────────────────────────   ────────────────────────────────
 ~200 modèles OpenRouter       5-10 modèles présélectionnés
@@ -40,11 +46,33 @@ abordable ? »                mes tâches métier ? »
 L'export `make export-gen-e2` génère un YAML injectable dans le shortlist
 quadrant de gen-e2-eval avec les colonnes sécurité et TCO.
 
+### Périmètre et règle de décision
+
+OpenRouter Research inclut :
+
+- la comparaison à grande échelle de modèles accessibles via OpenRouter ;
+- un screen de qualité générique, provider-neutral et versionné ;
+- les mesures de coût, de latence et de sécurité ;
+- la production d'une shortlist et de métadonnées traçables pour la suite.
+
+OpenRouter Research n'inclut pas :
+
+- la validation d'un workflow métier ou d'une golden dataset client ;
+- la mesure de la réussite fonctionnelle sur un use case ;
+- la recommandation finale d'un modèle pour une application ;
+- le remplacement des annotations humaines ou de l'évaluation dans
+  `gen-e2-eval`.
+
+La règle de décision est donc la suivante : les résultats de ce projet servent
+à filtrer et prioriser les modèles ; toute décision d'adoption doit être
+confirmée dans `gen-e2-eval` sur les tâches métier concernées.
+
 ## Structure de la documentation
 
 | Espace | Contenu | Source de vérité |
 | --- | --- | --- |
 | Guide du pipeline | Exécution, entrées, sorties et interprétation | `docs/workflow.md` |
+| Méthodologie qualité | Provenance des prompts, couverture, validation, comparaison `gen-e2-eval` | `docs/quality-methodology.md` |
 | Référence API | Classes, fonctions et signatures publiques | Docstrings dans `src/` et `dashboard/` |
 | ADR | Décisions d'architecture et compromis | `docs/adr/` |
 | Plans | Travaux planifiés ou en cours | `docs/plans/` |

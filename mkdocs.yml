@@ -39,7 +39,10 @@ plugins:
 nav:
   - Accueil: index.md
   - Workflow: workflow.md
-  - Brief manager: brief-manager-2026-08-17.md
+  - "Méthodologie qualité": quality-methodology.md
+  - "Validation qualité":
+      - "Revue v1": quality-validation/review-v1.md
+      - "Template comparaison gen-e2-eval": quality-validation/gen-e2-eval-comparison-template.md
   - "Audit critique (2026-08-21)": audit-2026-08-21.md
   - Référence API: reference/api.md
   - ADR:
@@ -48,3 +51,4 @@ nav:
       - "V2 — Pipeline async, observabilité, juge hybride": plans/feature-pipeline-v2-1.md
       - "Sécurité & coût — spécialisation": plans/feature-security-cost-specialization-1.md
   - Maintenance de la documentation: documentation.md
+  - "Brief manager (2026-08-17)": brief-manager-2026-08-17.md
