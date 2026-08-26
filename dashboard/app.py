@@ -45,13 +45,20 @@ def _load_benchmark(path_text: str, modified_ns: int) -> pd.DataFrame:
 
 
 def _parse_probe_details(raw: object) -> list[dict[str, object]]:
-    """Parse the serialized probe details produced by the scanner safely."""
+    """Parse the serialized probe details produced by the scanner safely.
+
+    The scanner emits JSON (``json.dumps``), but older/foreign data may use a
+    Python ``repr`` instead — try both rather than guessing from a prefix.
+    """
     if not isinstance(raw, str) or not raw.strip():
         return []
     try:
-        parsed: object = json.loads(raw) if raw.lstrip().startswith("[{") else ast.literal_eval(raw)
-    except (SyntaxError, ValueError, json.JSONDecodeError):
-        return []
+        parsed: object = json.loads(raw)
+    except (ValueError, json.JSONDecodeError):
+        try:
+            parsed = ast.literal_eval(raw)
+        except (SyntaxError, ValueError):
+            return []
     if not isinstance(parsed, list):
         return []
     return [item for item in parsed if isinstance(item, dict)]
@@ -84,6 +91,31 @@ def _numeric_series(results_df: pd.DataFrame, column: str, default: float = floa
     if column not in results_df.columns:
         return pd.Series(default, index=results_df.index, dtype="float64")
     return pd.to_numeric(results_df[column], errors="coerce")
+
+
+def _short_name(model_id: object) -> str:
+    """Return the trailing slug of an OpenRouter model id, e.g. 'gpt-4o-mini'."""
+    return str(model_id).split("/")[-1]
+
+
+def _best_row(frame: pd.DataFrame, column: str, ascending: bool = False) -> pd.Series | None:
+    """Return the row with the best value in *column* (max, or min if ascending), or None."""
+    if column not in frame.columns or frame.empty:
+        return None
+    values = pd.to_numeric(frame[column], errors="coerce")
+    if values.notna().sum() == 0:
+        return None
+    return frame.loc[values.idxmin() if ascending else values.idxmax()]
+
+
+def _safest_summary(frame: pd.DataFrame) -> tuple[str, str]:
+    """Return a (headline, detail) pair describing the safest model or overall exposure."""
+    rsi = _numeric_series(frame, "rsi") if "rsi" in frame.columns else pd.Series(dtype="float64")
+    if rsi.notna().any():
+        row = frame.loc[rsi.idxmax()]
+        return _short_name(row["model"]), f"RSI {row['rsi']:.0f} / 100"
+    safe_count = int((frame["security_status"] == "Safe").sum())
+    return f"{safe_count} / {len(frame)} safe", "No probe leaked the system prompt"
 
 
 csv_files = sorted(_RESULTS_DIR.glob("*.csv"), reverse=True)
@@ -120,17 +152,31 @@ df["security_status"] = (
     pd.Series("Safe", index=df.index).mask(leak_count > 0, "Partial risk").mask(vulnerable, "Vulnerable")
 )
 
+all_models = sorted(df["model"].unique())
+selected_models = st.sidebar.multiselect(
+    "Models to compare",
+    options=all_models,
+    default=all_models,
+    help="Narrow every tab below to a subset of models.",
+)
+if not selected_models:
+    st.warning("Select at least one model in the sidebar to see results.")
+    st.stop()
+df = df[df["model"].isin(selected_models)].reset_index(drop=True)
+
 (
     tab_overview,
     tab_quality,
     tab_security,
     tab_cost,
+    tab_raw,
 ) = st.tabs(
     [
         ":material/insights: Overview",
         ":material/fact_check: Quality screen",
         ":material/security: Security",
         ":material/payments: Cost intelligence",
+        ":material/table_rows: Raw data",
     ]
 )
 
@@ -142,6 +188,43 @@ with tab_overview:
         plot_df,
         cost_col="cost_per_1m_tokens_usd",
         quality_col="avg_quality_score",
+    )
+
+    best_quality = _best_row(plot_df, "avg_quality_score")
+    cheapest = _best_row(plot_df, "cost_per_1m_tokens_usd", ascending=True)
+    best_value = None
+    if not pareto_df.empty:
+        # "Sweet spot": cheapest Pareto-optimal model within 10% of the best quality score.
+        quality_floor = plot_df["avg_quality_score"].max() * 0.9
+        value_candidates = pareto_df.loc[pareto_df["avg_quality_score"] >= quality_floor]
+        best_value = value_candidates.iloc[0] if not value_candidates.empty else pareto_df.iloc[0]
+    safest_headline, safest_detail = _safest_summary(df)
+
+    with st.container(horizontal=True):
+        st.metric(
+            "Highest quality",
+            _short_name(best_quality["model"]) if best_quality is not None else "—",
+            f"{best_quality['avg_quality_score']:.2f} / 5" if best_quality is not None else None,
+            border=True,
+        )
+        st.metric(
+            "Lowest cost",
+            _short_name(cheapest["model"]) if cheapest is not None else "—",
+            f"${cheapest['cost_per_1m_tokens_usd']:.2f} / 1M tokens" if cheapest is not None else None,
+            border=True,
+        )
+        st.metric(
+            "Best value",
+            _short_name(best_value["model"]) if best_value is not None else "—",
+            "Cheapest within 10% of peak quality" if best_value is not None else None,
+            border=True,
+        )
+        st.metric("Safest", safest_headline, safest_detail, border=True)
+
+    st.caption(
+        "Ideal models land toward the top-left of the chart below: high quality-screen score at low "
+        "cost. The dotted line traces the Pareto frontier — every model on it avoids being beaten on "
+        "cost *and* quality simultaneously by another model."
     )
 
     color_map = {"Safe": "#2ecc71", "Partial risk": "#f39c12", "Vulnerable": "#e74c3c"}
@@ -227,11 +310,12 @@ with tab_quality:
     stability = _numeric_series(df, "quality_stability_score")
     cer_eligible = df.get("quality_cer_eligible", pd.Series(False, index=df.index)).fillna(False).astype(bool)
 
-    metric_columns = st.columns(4)
-    metric_columns[0].metric("Models screened", len(df), border=True)
-    metric_columns[1].metric("Full prompt coverage", int((coverage >= 1.0).sum()), border=True)
-    metric_columns[2].metric("All dimensions covered", int((dimension_coverage >= 1.0).sum()), border=True)
-    metric_columns[3].metric("CER eligible", int(cer_eligible.sum()), border=True)
+    metric_columns = st.container(horizontal=True)
+    with metric_columns:
+        st.metric("Models screened", len(df), border=True)
+        st.metric("Full prompt coverage", int((coverage >= 1.0).sum()), border=True)
+        st.metric("All dimensions covered", int((dimension_coverage >= 1.0).sum()), border=True)
+        st.metric("CER eligible", int(cer_eligible.sum()), border=True)
 
     if "quality_stability_score" not in df.columns or stability.notna().sum() == 0:
         st.caption("Stability is not measured in this run. Set `QUALITY_REPETITIONS=2` or higher for a shortlist.")
@@ -247,13 +331,19 @@ with tab_quality:
         "quality_collection_error_count",
         "quality_cer_eligible",
     ]
-    quality_display = df[[column for column in quality_columns if column in df.columns]].copy()
+    quality_display = (
+        df[[column for column in quality_columns if column in df.columns]]
+        .copy()
+        .sort_values("avg_quality_score", ascending=False, na_position="last")
+    )
     st.dataframe(
         quality_display,
         width="stretch",
         hide_index=True,
         column_config={
-            "avg_quality_score": st.column_config.NumberColumn("Quality score", format="%.2f / 5"),
+            "avg_quality_score": st.column_config.ProgressColumn(
+                "Quality score", format="%.2f / 5", min_value=0, max_value=5
+            ),
             "quality_pass_rate": st.column_config.NumberColumn("Prompt pass rate", format="percent"),
             "quality_coverage_rate": st.column_config.NumberColumn("Prompt coverage", format="percent"),
             "quality_dimension_coverage_rate": st.column_config.NumberColumn("Dimension coverage", format="percent"),
@@ -272,6 +362,25 @@ with tab_quality:
 
 with tab_security:
     st.subheader("Security analysis")
+    st.caption(
+        "Injection probes attempt to leak the system prompt across OWASP GenAI LLM Top 10 categories. "
+        "This is a generic robustness screen, not a full penetration test."
+    )
+
+    zdr_count = int(df["zero_data_retention"].fillna(False).astype(bool).sum())
+    with st.container(horizontal=True):
+        st.metric("Models scanned", len(df), border=True)
+        st.metric("Flagged vulnerable", int((df["security_status"] == "Vulnerable").sum()), border=True)
+        st.metric("Zero data retention", f"{zdr_count} / {len(df)}", border=True)
+        rsi_values = _numeric_series(df, "rsi") if "rsi" in df.columns else pd.Series(dtype="float64")
+        if rsi_values.notna().any():
+            st.metric("Average RSI", f"{rsi_values.mean():.0f} / 100", border=True)
+
+    if "rsi" in df.columns:
+        st.plotly_chart(build_rsi_bar(df[["model", "rsi"]].drop_duplicates()), width="stretch")
+    else:
+        st.caption("The selected result does not contain a Robustness Safety Index (RSI).")
+
     security_df = _security_long_frame(df)
     if security_df.empty:
         st.info(
@@ -280,11 +389,6 @@ with tab_security:
         )
     else:
         st.plotly_chart(build_owasp_heatmap(security_df), width="stretch")
-
-    if "rsi" in df.columns:
-        st.plotly_chart(build_rsi_bar(df[["model", "rsi"]].drop_duplicates()), width="stretch")
-    else:
-        st.caption("The selected result does not contain a Robustness Safety Index (RSI).")
 
     with st.container(border=True):
         st.markdown("**Zero data retention policy**")
@@ -315,6 +419,41 @@ with tab_cost:
         input_price * profile.monthly_prompt_tokens + completion_price * profile.monthly_completion_tokens
     )
 
+    if "quality_cer_eligible" in cost_df.columns:
+        # Re-normalize CER against the *selected* workload profile's TCO, not the one baked into
+        # the CSV at collect time — otherwise switching profiles would silently leave CER stale.
+        eligible = cost_df["quality_cer_eligible"].fillna(False).astype(bool)
+        eligible_quality = _numeric_series(cost_df, "avg_quality_score").where(eligible, 0.0).fillna(0.0)
+        raw_cer = (eligible_quality / cost_df["tco_usd"]).replace([float("inf"), -float("inf")], 0.0).fillna(0.0)
+        max_cer = raw_cer.max()
+        cost_df["cer"] = (raw_cer / max_cer).round(4) if max_cer > 0 else raw_cer
+
+    cheapest_tco = _best_row(cost_df, "tco_usd", ascending=True)
+    priciest_tco = _best_row(cost_df, "tco_usd", ascending=False)
+    best_cer = None
+    if "cer" in cost_df.columns and cost_df.get("quality_cer_eligible", pd.Series(dtype=bool)).fillna(False).any():
+        best_cer = _best_row(cost_df, "cer")
+
+    with st.container(horizontal=True):
+        st.metric(
+            "Cheapest monthly TCO",
+            _short_name(cheapest_tco["model"]) if cheapest_tco is not None else "—",
+            f"${cheapest_tco['tco_usd']:.2f}/mo" if cheapest_tco is not None else None,
+            border=True,
+        )
+        st.metric(
+            "Priciest monthly TCO",
+            _short_name(priciest_tco["model"]) if priciest_tco is not None else "—",
+            f"${priciest_tco['tco_usd']:.2f}/mo" if priciest_tco is not None else None,
+            border=True,
+        )
+        st.metric(
+            "Best cost-efficiency (CER)",
+            _short_name(best_cer["model"]) if best_cer is not None else "—",
+            f"{best_cer['cer']:.4f}" if best_cer is not None else None,
+            border=True,
+        )
+
     cost_columns = [
         "model",
         "prompt_price_per_token",
@@ -343,7 +482,9 @@ with tab_cost:
                 "Actual cost coverage",
                 format="percent",
             ),
-            "avg_quality_score": st.column_config.NumberColumn("Quality score", format="%.2f / 5"),
+            "avg_quality_score": st.column_config.ProgressColumn(
+                "Quality score", format="%.2f / 5", min_value=0, max_value=5
+            ),
             "cer": st.column_config.NumberColumn("Normalized CER", format="%.4f"),
             "quality_cer_eligible": st.column_config.CheckboxColumn("Eligible for CER"),
         },
@@ -379,5 +520,10 @@ with tab_cost:
     else:
         st.caption("The cost-versus-security quadrant requires RSI data from an OWASP security scan.")
 
-st.subheader("Full benchmark results")
-st.dataframe(df, width="stretch", hide_index=True)
+with tab_raw:
+    st.subheader("Full benchmark results")
+    st.caption(
+        "Every column from the selected run for the models chosen in the sidebar — useful for audits, "
+        "spreadsheets, or spotting a column the curated tabs above don't surface."
+    )
+    st.dataframe(df, width="stretch", hide_index=True)
