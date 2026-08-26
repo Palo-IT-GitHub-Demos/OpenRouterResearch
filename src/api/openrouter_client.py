@@ -252,6 +252,31 @@ class OpenRouterClient(_CallCostLedger):
         data: list[dict[str, Any]] = response.json().get("data", [])
         return data
 
+    def get_key_info(self) -> dict[str, Any]:
+        """Fetch account/key metadata (credit balance, usage) from ``GET /api/v1/key``.
+
+        Metadata-only endpoint — OpenRouter does not bill this call. A failure
+        here (typically HTTP 401) means the configured API key itself is
+        invalid, independent of any model or prompt.
+
+        Raises:
+            OpenRouterError: On HTTP or network errors.
+        """
+        try:
+            response = self._http.get("/key")
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 401:
+                raise OpenRouterError(
+                    "OpenRouter rejected the API key (HTTP 401 Unauthorized) — " "check OPENROUTER_API_KEY in .env."
+                ) from exc
+            raise OpenRouterError(f"Failed to fetch key info: HTTP {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            raise OpenRouterError(f"Failed to fetch key info: {exc}") from exc
+
+        data: dict[str, Any] = response.json().get("data", {})
+        return data
+
     def close(self) -> None:
         """Release underlying HTTP connections."""
         self._http.close()
@@ -354,6 +379,31 @@ class AsyncOpenRouterClient(_CallCostLedger):
             raise OpenRouterError(f"Failed to fetch models: {exc}") from exc
 
         data: list[dict[str, Any]] = response.json().get("data", [])
+        return data
+
+    async def get_key_info(self) -> dict[str, Any]:
+        """Async fetch of account/key metadata from ``GET /api/v1/key``.
+
+        Metadata-only endpoint — OpenRouter does not bill this call. A failure
+        here (typically HTTP 401) means the configured API key itself is
+        invalid, independent of any model or prompt.
+
+        Raises:
+            OpenRouterError: On HTTP or network errors.
+        """
+        try:
+            response = await self._http.get("/key")
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 401:
+                raise OpenRouterError(
+                    "OpenRouter rejected the API key (HTTP 401 Unauthorized) — " "check OPENROUTER_API_KEY in .env."
+                ) from exc
+            raise OpenRouterError(f"Failed to fetch key info: HTTP {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            raise OpenRouterError(f"Failed to fetch key info: {exc}") from exc
+
+        data: dict[str, Any] = response.json().get("data", {})
         return data
 
     async def aclose(self) -> None:

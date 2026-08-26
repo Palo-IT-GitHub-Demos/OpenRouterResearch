@@ -20,6 +20,7 @@ from src.main import (
     _FREE_TIER_RPD_NO_CREDITS,
     CollectPipeline,
     MergePipeline,
+    VerifyPipeline,
     _enforce_collect_error_budget,
     _estimate_free_tier_request_volume,
     _unknown_target_models,
@@ -295,6 +296,60 @@ def _patch_async_client_context_manager(monkeypatch: pytest.MonkeyPatch) -> Magi
     return mock_client
 
 
+class TestVerifyPipeline:
+    """Unit tests for VerifyPipeline.run() — the real-but-zero-cost preflight.
+
+    ``_run_cost_stage`` is reused from ``CollectPipeline`` via composition, so
+    it's patched at the class level exactly like ``TestCollectPipelineRun`` does.
+    """
+
+    @staticmethod
+    def _settings(**overrides: object) -> Settings:
+        defaults: dict[str, object] = {"openrouter_api_key": "sk-test", "target_models": "openai/gpt-4o-mini"}
+        defaults.update(overrides)
+        return Settings(**defaults)  # type: ignore[arg-type]
+
+    async def test_happy_path_logs_success_and_does_not_raise(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        mock_client = _patch_async_client_context_manager(monkeypatch)
+        mock_client.get_key_info = AsyncMock(return_value={"label": "my-key", "usage": 0.1, "limit": None})
+        pricing_df = pd.DataFrame([{"model_id": "openai/gpt-4o-mini", "prompt_price_per_token": 1e-7}])
+        monkeypatch.setattr(CollectPipeline, "_run_cost_stage", AsyncMock(return_value=pricing_df))
+
+        with caplog.at_level("INFO"):
+            await VerifyPipeline(self._settings()).run()
+
+        assert any("Ready for a real run" in record.message for record in caplog.records)
+
+    async def test_raises_when_key_check_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from src.api.openrouter_client import OpenRouterError
+
+        mock_client = _patch_async_client_context_manager(monkeypatch)
+        mock_client.get_key_info = AsyncMock(side_effect=OpenRouterError("401 Unauthorized"))
+        monkeypatch.setattr(CollectPipeline, "_run_cost_stage", AsyncMock(return_value=pd.DataFrame()))
+
+        with pytest.raises(ValueError, match="API key check failed"):
+            await VerifyPipeline(self._settings()).run()
+
+    async def test_raises_when_catalog_fetch_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        mock_client = _patch_async_client_context_manager(monkeypatch)
+        mock_client.get_key_info = AsyncMock(return_value={"label": "my-key"})
+        monkeypatch.setattr(CollectPipeline, "_run_cost_stage", AsyncMock(return_value=pd.DataFrame()))
+
+        with pytest.raises(ValueError, match="live model catalog"):
+            await VerifyPipeline(self._settings()).run()
+
+    async def test_raises_when_target_model_is_unknown(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        mock_client = _patch_async_client_context_manager(monkeypatch)
+        mock_client.get_key_info = AsyncMock(return_value={"label": "my-key"})
+        pricing_df = pd.DataFrame([{"model_id": "some/other-model"}])
+        monkeypatch.setattr(CollectPipeline, "_run_cost_stage", AsyncMock(return_value=pricing_df))
+
+        with pytest.raises(ValueError, match="not in the"):
+            await VerifyPipeline(self._settings(target_models="openai/gpt-4o-mini")).run()
+
+
 class TestCollectPipelineRun:
     """Integration tests for CollectPipeline.run() — mocks the OpenRouter client
     and the three stage methods so only the orchestration logic (preflight,
@@ -495,6 +550,27 @@ class TestMainDispatch:
         main()
 
         mock_instance.run.assert_awaited_once()
+
+    def test_verify_subcommand_invokes_verify_pipeline(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["prog", "verify"])
+        mock_instance = MagicMock()
+        mock_instance.run = AsyncMock(return_value=None)
+        monkeypatch.setattr("src.main.VerifyPipeline", MagicMock(return_value=mock_instance))
+
+        main()
+
+        mock_instance.run.assert_awaited_once()
+
+    def test_verify_subcommand_exits_with_error_on_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["prog", "verify"])
+        mock_instance = MagicMock()
+        mock_instance.run = AsyncMock(side_effect=ValueError("[VERIFY] boom"))
+        monkeypatch.setattr("src.main.VerifyPipeline", MagicMock(return_value=mock_instance))
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+        assert exc_info.value.code == 1
 
     def test_unknown_subcommand_exits_with_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["prog", "bogus"])

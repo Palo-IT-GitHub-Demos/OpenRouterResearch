@@ -1,4 +1,4 @@
-.PHONY: help install dev test test-cov lint fmt type-check docs-build docs-serve run collect judge merge dashboard dry-run export-gen-e2
+.PHONY: help install dev test test-cov lint fmt type-check docs-build docs-serve run collect judge merge dashboard verify dry-run export-gen-e2
 
 PYTHON ?= .venv/bin/python
 
@@ -48,6 +48,9 @@ run: ## Phase 1 — collecte réponses + éval déterministe + sécurité (alias
 
 collect: ## Phase 1 — collect responses + deterministic eval + security (lit TARGET_MODELS depuis .env)
 	$(PYTHON) -m src.main collect
+
+verify: ## Vérification réelle mais gratuite — clé API + TARGET_MODELS contre le catalogue live OpenRouter (GET /key + GET /models, $0, avant un run payant)
+	$(PYTHON) -m src.main verify
 
 dry-run: ## Simulation offline du pipeline complet — AUCUN appel OpenRouter, AUCUN agent juge (vérification avant un run payant)
 	$(PYTHON) -m src.main dry-run

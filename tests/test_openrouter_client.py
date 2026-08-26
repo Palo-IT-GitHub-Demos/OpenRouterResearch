@@ -136,6 +136,50 @@ class TestGetModels:
                 client.get_models()
 
 
+class TestGetKeyInfo:
+    def test_returns_key_metadata(self, client: OpenRouterClient) -> None:
+        fake_response = MagicMock(spec=httpx.Response)
+        fake_response.json.return_value = {
+            "data": {"label": "my-key", "usage": 1.23, "limit": None, "limit_remaining": None, "is_free_tier": False}
+        }
+        fake_response.raise_for_status = MagicMock()
+
+        with patch.object(client._http, "get", return_value=fake_response):
+            info = client.get_key_info()
+
+        assert info["label"] == "my-key"
+        assert info["usage"] == 1.23
+
+    def test_raises_open_router_error_with_actionable_message_on_401(self, client: OpenRouterClient) -> None:
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 401
+
+        with patch.object(
+            client._http,
+            "get",
+            side_effect=httpx.HTTPStatusError("Unauthorized", request=MagicMock(), response=mock_response),
+        ):
+            with pytest.raises(OpenRouterError, match="OPENROUTER_API_KEY"):
+                client.get_key_info()
+
+    def test_raises_open_router_error_on_other_http_error(self, client: OpenRouterClient) -> None:
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 503
+
+        with patch.object(
+            client._http,
+            "get",
+            side_effect=httpx.HTTPStatusError("Unavailable", request=MagicMock(), response=mock_response),
+        ):
+            with pytest.raises(OpenRouterError, match="503"):
+                client.get_key_info()
+
+    def test_raises_open_router_error_on_network_error(self, client: OpenRouterClient) -> None:
+        with patch.object(client._http, "get", side_effect=httpx.ConnectError("boom")):
+            with pytest.raises(OpenRouterError, match="Failed to fetch key info"):
+                client.get_key_info()
+
+
 class TestAsyncChatCompletion:
     async def test_records_actual_cost_from_openrouter_usage(self, settings: Settings) -> None:
         client = AsyncOpenRouterClient(settings)
@@ -162,3 +206,37 @@ class TestAsyncChatCompletion:
         record = client.call_costs[0]
         assert record.usage_context == "security_scan"
         assert record.actual_cost_credits == pytest.approx(0.0001)
+
+
+class TestAsyncGetKeyInfo:
+    async def test_returns_key_metadata(self, settings: Settings) -> None:
+        client = AsyncOpenRouterClient(settings)
+        fake_response = MagicMock(spec=httpx.Response)
+        fake_response.json.return_value = {"data": {"label": "my-key", "usage": 0.5}}
+        fake_response.raise_for_status = MagicMock()
+
+        try:
+            with patch.object(client._http, "get", new=AsyncMock(return_value=fake_response)):
+                info = await client.get_key_info()
+        finally:
+            await client.aclose()
+
+        assert info["label"] == "my-key"
+
+    async def test_raises_open_router_error_with_actionable_message_on_401(self, settings: Settings) -> None:
+        client = AsyncOpenRouterClient(settings)
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 401
+
+        try:
+            with patch.object(
+                client._http,
+                "get",
+                new=AsyncMock(
+                    side_effect=httpx.HTTPStatusError("Unauthorized", request=MagicMock(), response=mock_response)
+                ),
+            ):
+                with pytest.raises(OpenRouterError, match="OPENROUTER_API_KEY"):
+                    await client.get_key_info()
+        finally:
+            await client.aclose()
