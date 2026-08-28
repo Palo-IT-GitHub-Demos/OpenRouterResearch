@@ -74,10 +74,11 @@ flowchart TD
 | Variable | Rôle | Défaut |
 |---|---|---|
 | `OPENROUTER_API_KEY` | Clé API OpenRouter (obligatoire) | — |
-| `TARGET_MODELS` | Modèles à benchmarker (virgule-séparés) | 3 modèles gratuits |
+| `TARGET_MODELS` | Modèles à benchmarker (virgule-séparés), ou un nom de preset (`free_general`/`paid_flagship`/`mixed_value`, voir `make models`) | 3 modèles gratuits |
 | `MAX_CONCURRENT_REQUESTS` | `asyncio.Semaphore` — 3 pour le free tier | `3` |
 | `MLFLOW_TRACKING_URI` | Base de données de tracking | `sqlite:///mlruns.db` |
-| `SECURITY_PROBES_PATH` | Fichier de sondes custom (optionnel) | — |
+| `SECURITY_MODE` | Jeu de sondes nommé : `basic` (5 sondes built-in), `owasp` (30 sondes), `extended` (15 sondes avancées) | `basic` |
+| `SECURITY_PROBES_PATH` | Fichier de sondes custom (optionnel, prioritaire sur `SECURITY_MODE`) | — |
 | `QUALITY_REPETITIONS` | Répétitions de chaque prompt qualité (1-5) | `1` |
 | `WORKLOAD_PROFILE` | Profil de charge pour le TCO | `enterprise_qa` |
 
@@ -109,6 +110,16 @@ make collect   # Phase 1
 # Puis dans Copilot chat : @judge-coordinator   (Phase 2)
 make merge     # Phase 3
 ```
+
+!!! tip "Choisir les modèles et le niveau de sécurité sans éditer .env"
+    `MODELS=` et `SECURITY=` s'appliquent à une seule invocation, sans modifier `.env` :
+    ```bash
+    make models                                    # liste les presets disponibles
+    make verify MODELS=paid_flagship SECURITY=owasp
+    make collect MODELS=paid_flagship SECURITY=owasp
+    ```
+    Le tableau de bord Streamlit propose le même choix visuellement dans son panneau
+    « Plan a new run » et affiche la commande `make` correspondante.
 
 ---
 
@@ -287,9 +298,11 @@ du modèle (`/api/v1/models`).
 
 !!! tip "Activer les sondes OWASP"
     ```bash
+    make collect SECURITY=owasp
+    # équivalent explicite :
     SECURITY_PROBES_PATH=data/prompts/owasp_probes.json make collect
     ```
-    Sans cette variable, les 5 sondes d'injection built-in sont utilisées.
+    Sans cela (`SECURITY_MODE=basic`, défaut), les 5 sondes d'injection built-in sont utilisées.
 
 ---
 
@@ -411,7 +424,7 @@ make collect
 make merge
 
 # Sondes OWASP complètes
-SECURITY_PROBES_PATH=data/prompts/owasp_probes.json make collect
+make collect SECURITY=owasp
 
 # Mesure de stabilité (2 passages par prompt)
 QUALITY_REPETITIONS=2 make collect
@@ -477,10 +490,11 @@ La configuration est chargée depuis `.env` via `pydantic-settings`.
 | Variable | Rôle |
 |---|---|
 | `OPENROUTER_API_KEY` | Clé API OpenRouter (obligatoire) |
-| `TARGET_MODELS` | Modèles à benchmarker (virgule-séparés) |
+| `TARGET_MODELS` | Modèles à benchmarker (virgule-séparés), ou un nom de preset (voir `make models`) |
 | `MAX_CONCURRENT_REQUESTS` | `asyncio.Semaphore` — 3 pour le free tier |
 | `MLFLOW_TRACKING_URI` | `sqlite:///mlruns.db` (local par défaut) |
-| `SECURITY_PROBES_PATH` | Chemin vers un fichier de sondes custom (optionnel) |
+| `SECURITY_MODE` | `basic` / `owasp` / `extended` — voir `make collect SECURITY=<mode>` |
+| `SECURITY_PROBES_PATH` | Chemin vers un fichier de sondes custom (optionnel, prioritaire) |
 
 > **Note :** `JUDGE_MODEL` n'existe plus. Le jugement qualité est assuré par
 > 3 agents GitHub Copilot (`@judge-anthropic`, `@judge-openai`, `@judge-google`)
@@ -652,7 +666,8 @@ l'absence de rétention des données.
 
 `data/prompts/extended_probes.json` contient 15 sondes JailbreakBench-style :
 base64, Unicode lookalike, hypothetical framing, developer mode, payload split,
-social engineering. Activer via `SECURITY_PROBES_PATH=data/prompts/extended_probes.json`.
+social engineering. Activer via `make collect SECURITY=extended` (équivalent
+explicite : `SECURITY_PROBES_PATH=data/prompts/extended_probes.json`).
 
 ---
 
@@ -742,7 +757,7 @@ Le modèle a divulgué son system prompt sur au moins une sonde.
 ### `leak_count` élevé (3-5/5)
 
 Le modèle est vulnérable à plusieurs techniques d'injection.
-→ Tester avec les sondes avancées (`extended_probes.json`) pour une évaluation
+→ Tester avec les sondes avancées (`make collect SECURITY=extended`) pour une évaluation
 complète avant déploiement.
 
 ### `zero_data_retention = False`
@@ -762,7 +777,7 @@ make collect                    # Phase 1
 make merge                      # Phase 3
 
 # Benchmark avec sondes avancées
-SECURITY_PROBES_PATH=data/prompts/extended_probes.json make collect
+make collect SECURITY=extended
 
 # Dashboard
 make dashboard

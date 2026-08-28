@@ -1,4 +1,4 @@
-# Manager Brief - OpenRouter Research Progress
+# Manager Brief - LLM Model Screening Progress
 
 > **Statut du document :** support de pilotage daté, destiné au suivi de projet
 > et à la préparation des échanges. Ce brief n'est pas une source normative de
@@ -9,7 +9,7 @@ Date: 2026-08-18 (updated — see revision note at the end)
 
 ## 0. What This Project Is (Plain-English Primer)
 
-This repository ("open-router-research") performs a comparative **screening** of
+This repository ("llm-model-screening") performs a comparative **screening** of
 Large Language Models (LLMs) available through the
 [OpenRouter](https://openrouter.ai/) API aggregator, so we can build a
 **shortlist** before doing a deeper, business-specific evaluation in the sister

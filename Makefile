@@ -1,4 +1,4 @@
-.PHONY: help install dev test test-cov lint fmt type-check docs-build docs-serve run collect judge merge dashboard verify dry-run export-gen-e2
+.PHONY: help install dev test test-cov lint fmt type-check docs-build docs-serve run collect judge merge dashboard verify dry-run export-gen-e2 models
 
 PYTHON ?= .venv/bin/python
 
@@ -39,21 +39,21 @@ docs-build: ## Build documentation and validate links strictly
 docs-serve: ## Preview documentation with live reload
 	$(PYTHON) -m mkdocs serve
 
-run: ## Phase 1 — collecte réponses + éval déterministe + sécurité (alias de collect)
-	$(PYTHON) -m src.main collect
+run: ## Phase 1 — collecte réponses + éval déterministe + sécurité (alias de collect ; MODELS=<preset|liste> SECURITY=<basic|owasp|extended> optionnels)
+	$(PYTHON) -m src.main collect $(if $(MODELS),--models "$(MODELS)") $(if $(SECURITY),--security $(SECURITY))
 	@echo ""
 	@echo "Étape suivante — Phase 2 : dans Copilot chat, invoquer :"
 	@echo "  @judge-coordinator   (lance les 3 juges en parallèle automatiquement)"
 	@echo "Puis Phase 3 : make merge"
 
-collect: ## Phase 1 — collect responses + deterministic eval + security (lit TARGET_MODELS depuis .env)
-	$(PYTHON) -m src.main collect
+collect: ## Phase 1 — collect responses + deterministic eval + security (MODELS=<preset|list> SECURITY=<basic|owasp|extended> optional, else .env)
+	$(PYTHON) -m src.main collect $(if $(MODELS),--models "$(MODELS)") $(if $(SECURITY),--security $(SECURITY))
 
-verify: ## Vérification réelle mais gratuite — clé API + TARGET_MODELS contre le catalogue live OpenRouter (GET /key + GET /models, $0, avant un run payant)
-	$(PYTHON) -m src.main verify
+verify: ## Vérification réelle mais gratuite — clé API + TARGET_MODELS contre le catalogue live OpenRouter (GET /key + GET /models, $0, avant un run payant ; MODELS=/SECURITY= optionnels)
+	$(PYTHON) -m src.main verify $(if $(MODELS),--models "$(MODELS)") $(if $(SECURITY),--security $(SECURITY))
 
-dry-run: ## Simulation offline du pipeline complet — AUCUN appel OpenRouter, AUCUN agent juge (vérification avant un run payant)
-	$(PYTHON) -m src.main dry-run
+dry-run: ## Simulation offline du pipeline complet — AUCUN appel OpenRouter, AUCUN agent juge (MODELS=/SECURITY= optionnels)
+	$(PYTHON) -m src.main dry-run $(if $(MODELS),--models "$(MODELS)") $(if $(SECURITY),--security $(SECURITY))
 
 judge: ## Phase 2 — ouvrir un agent juge Copilot (choisir parmi les 3 providers)
 	@echo "Option A — coordinateur (recommandé) : lance les 3 juges automatiquement"
@@ -70,6 +70,9 @@ merge: ## Phase 3 — merge Copilot scores + export final results
 
 dashboard: ## Launch the Streamlit dashboard
 	$(PYTHON) -m streamlit run dashboard/app.py
+
+models: ## List the coherent model-set presets available for MODELS=<name> (see also: dashboard "Plan a new run")
+	$(PYTHON) -m src.main models
 
 export-gen-e2: ## Export latest benchmark to gen-e2-eval compatible YAML (set PROFILE=<name> to override)
 	$(PYTHON) scripts/export_gen_e2_registry.py \

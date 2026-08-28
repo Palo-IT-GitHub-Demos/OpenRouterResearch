@@ -2,7 +2,7 @@
 
 ## Objectif
 
-Comparer les classements obtenus par la suite OpenRouter Research et par
+Comparer les classements obtenus par la suite LLM Model Screening et par
 `gen-e2-eval` sur un même ensemble de modèles.
 
 ## Méthode

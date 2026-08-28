@@ -15,6 +15,7 @@ import pandas as pd
 import pytest
 
 from src.core.config import Settings
+from src.core.model_presets import MODEL_PRESETS
 from src.evaluators.quality_judge import CollectResult
 from src.main import (
     _FREE_TIER_RPD_NO_CREDITS,
@@ -23,6 +24,7 @@ from src.main import (
     VerifyPipeline,
     _enforce_collect_error_budget,
     _estimate_free_tier_request_volume,
+    _resolve_security_probes_path,
     _unknown_target_models,
     _warn_on_free_tier_request_volume,
     main,
@@ -506,6 +508,37 @@ class TestMergePipelineRun:
             MergePipeline().run()
 
 
+class TestResolveSecurityProbesPath:
+    """SECURITY_MODE resolution — the single source of truth for all 5 former
+    duplicated call sites (CollectPipeline.run/_run_security_stage,
+    VerifyPipeline.run, the dead-code AsyncPipeline, and _run_preflight_checks).
+    """
+
+    def _settings(self, **overrides: object) -> Settings:
+        defaults: dict[str, object] = {"openrouter_api_key": "sk-test"}
+        defaults.update(overrides)
+        return Settings(_env_file=None, **defaults)  # type: ignore[arg-type, call-arg]
+
+    def test_basic_mode_uses_the_built_in_probes(self) -> None:
+        assert _resolve_security_probes_path(self._settings(security_mode="basic")) is None
+
+    def test_owasp_mode_resolves_to_the_owasp_probe_file(self) -> None:
+        result = _resolve_security_probes_path(self._settings(security_mode="owasp"))
+        assert result == Path("data/prompts/owasp_probes.json")
+
+    def test_extended_mode_resolves_to_the_extended_probe_file(self) -> None:
+        result = _resolve_security_probes_path(self._settings(security_mode="extended"))
+        assert result == Path("data/prompts/extended_probes.json")
+
+    def test_explicit_probes_path_wins_over_security_mode(self) -> None:
+        settings = self._settings(security_mode="owasp", security_probes_path="custom/probes.json")
+        assert _resolve_security_probes_path(settings) == Path("custom/probes.json")
+
+    def test_unknown_security_mode_raises_a_clear_error(self) -> None:
+        with pytest.raises(ValueError, match="Unknown SECURITY_MODE 'bogus'"):
+            _resolve_security_probes_path(self._settings(security_mode="bogus"))
+
+
 class TestMainDispatch:
     """Integration tests for main()'s CLI subcommand dispatch."""
 
@@ -585,6 +618,55 @@ class TestMainDispatch:
         mock_instance = MagicMock()
         mock_instance.run = AsyncMock(side_effect=RuntimeError("boom"))
         monkeypatch.setattr("src.main.CollectPipeline", MagicMock(return_value=mock_instance))
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+        assert exc_info.value.code == 1
+
+    def test_models_subcommand_prints_presets_and_never_touches_settings(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(sys, "argv", ["prog", "models"])
+        monkeypatch.setattr("src.main.get_settings", MagicMock(side_effect=AssertionError("should not be called")))
+
+        main()
+
+        out = capsys.readouterr().out
+        assert "free_general" in out
+        assert "paid_flagship" in out
+
+    def test_collect_with_models_flag_overrides_target_models(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["prog", "collect", "--models", "paid_flagship"])
+        base_settings = Settings(openrouter_api_key="sk-test", _env_file=None)  # type: ignore[call-arg]
+        monkeypatch.setattr("src.main.get_settings", MagicMock(return_value=base_settings))
+        mock_instance = MagicMock()
+        mock_instance.run = AsyncMock(return_value=Path("data/intermediate/pending_x.json"))
+        mock_cls = MagicMock(return_value=mock_instance)
+        monkeypatch.setattr("src.main.CollectPipeline", mock_cls)
+
+        main()
+
+        mock_cls.assert_called_once()
+        (settings_arg,) = mock_cls.call_args.args
+        assert settings_arg.target_models_list == list(MODEL_PRESETS["paid_flagship"].models)
+
+    def test_collect_with_security_flag_overrides_security_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["prog", "collect", "--security", "owasp"])
+        base_settings = Settings(openrouter_api_key="sk-test", _env_file=None)  # type: ignore[call-arg]
+        monkeypatch.setattr("src.main.get_settings", MagicMock(return_value=base_settings))
+        mock_instance = MagicMock()
+        mock_instance.run = AsyncMock(return_value=Path("data/intermediate/pending_x.json"))
+        mock_cls = MagicMock(return_value=mock_instance)
+        monkeypatch.setattr("src.main.CollectPipeline", mock_cls)
+
+        main()
+
+        (settings_arg,) = mock_cls.call_args.args
+        assert settings_arg.security_mode == "owasp"
+
+    def test_invalid_models_flag_exits_with_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "argv", ["prog", "collect", "--models", "not_a_real_preset"])
 
         with pytest.raises(SystemExit) as exc_info:
             main()

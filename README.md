@@ -1,4 +1,4 @@
-# open-router-research — LLM Evaluation Pipeline (LLMOps)
+# llm-model-screening — LLM Evaluation Pipeline (LLMOps)
 
 > Automated, scalable screening of large language models available on
 > [OpenRouter](https://openrouter.ai/) across three critical axes: **Quality**,
@@ -22,7 +22,7 @@ the number of models to evaluate in the sister project
 
 ### Scope boundary
 
-OpenRouter Research answers: **"Which models are worth evaluating further?"**
+LLM Model Screening answers: **"Which models are worth evaluating further?"**
 
 It does not answer: **"Which model is best for this specific business
 workflow?"** That decision belongs to `gen-e2-eval`, using client-specific
@@ -32,11 +32,11 @@ recommendation.
 
 ### Evaluation axes
 
-| Axis               | Method                                                                                          | Key metric                                              |
-| ------------------ | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| **Quality**  | Versioned generic screen: deterministic contracts + blind LLM-as-a-Judge for open prompts       | Macro-average 1–5 by dimension, coverage and stability |
-| **Cost**     | Live price projection + OpenRouter`response.usage.cost` ledger                                | TCO monthly + actual credits per call                   |
-| **Security** | 5 built-in prompt-injection probes (+ optional extended set) + Zero Data Retention policy check | Leak count / ZDR flag                                   |
+| Axis               | Method                                                                                                                                                                                              | Key metric                                              |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| **Quality**  | Versioned generic screen: deterministic contracts + blind LLM-as-a-Judge for open prompts                                                                                                           | Macro-average 1–5 by dimension, coverage and stability |
+| **Cost**     | Live price projection + OpenRouter`response.usage.cost` ledger                                                                                                                                    | TCO monthly + actual credits per call                   |
+| **Security** | 5 built-in prompt-injection probes, or a named`SECURITY_MODE` (`owasp`: 30 probes / OWASP GenAI LLM Top 10 2026, `extended`: 15 advanced jailbreak probes) + Zero Data Retention policy check | Leak count / RSI / ZDR flag                             |
 
 ---
 
@@ -45,7 +45,8 @@ recommendation.
 ```text
 src/
 ├── core/
-│   └── config.py              # Pydantic-settings (env vars, target models)
+│   ├── config.py              # Pydantic-settings (env vars, target models)
+│   └── model_presets.py       # Named, coherent TARGET_MODELS sets (free/paid/mixed)
 ├── api/
 │   └── openrouter_client.py   # Sync + Async OpenAI SDK wrapper (tenacity retries, Semaphore)
 ├── evaluators/
@@ -111,7 +112,7 @@ docs/
 
 ```bash
 git clone <repo>
-cd open-router-research
+cd llm-model-screening
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e ".[dev,docs]"
@@ -131,6 +132,23 @@ cp .env.example .env
 > Model slugs on OpenRouter change over time (renames, deprecations). Run
 > `make verify` after editing `TARGET_MODELS` — it checks every entry against
 > the live catalog for free, before any paid call is made.
+
+#### Pick a model set faster with a preset
+
+Instead of hand-typing model IDs, use a named, coherent preset — either in
+`.env` (`TARGET_MODELS=paid_flagship`) or per run, without touching `.env`:
+
+```bash
+make models                          # list every preset + the models it contains
+make verify MODELS=paid_flagship     # $0 — check a preset against the live catalog
+make collect MODELS=paid_flagship SECURITY=owasp
+```
+
+`SECURITY=` picks the probe set for that run only: `basic` (5 built-in probes,
+default), `owasp` (30 probes / OWASP GenAI LLM Top 10 2026 — required for the
+dashboard's RSI/heatmap), or `extended` (15 advanced jailbreak/obfuscation
+probes). The Streamlit dashboard's **"Plan a new run"** panel does the same
+picking visually and prints the ready-to-run command.
 
 ### 4. Verify before spending anything
 
@@ -188,15 +206,16 @@ streamlit run dashboard/app.py
 
 All settings are loaded from environment variables (`.env`).
 
-| Variable                    | Default                          | Description                                                                             |
-| --------------------------- | -------------------------------- | --------------------------------------------------------------------------------------- |
-| `OPENROUTER_API_KEY`      | —                               | **Required.** OpenRouter API key                                                  |
-| `OPENROUTER_BASE_URL`     | `https://openrouter.ai/api/v1` | API base URL                                                                            |
-| `TARGET_MODELS`           | 3 preset models                  | Comma-separated list of models to benchmark                                             |
-| `MAX_CONCURRENT_REQUESTS` | `3`                            | `asyncio.Semaphore` cap (conservative default for free-tier)                          |
-| `MLFLOW_TRACKING_URI`     | `sqlite:///mlruns.db`          | MLflow tracking database (SQLite)                                                       |
-| `SECURITY_PROBES_PATH`    | —                               | Path to a custom probe JSON file (overrides built-in probes)                            |
-| `QUALITY_REPETITIONS`     | `1`                            | Repeats per generic quality prompt; use`2`–`5` only for shortlist stability checks |
+| Variable                    | Default                          | Description                                                                                                                                                                        |
+| --------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENROUTER_API_KEY`      | —                               | **Required.** OpenRouter API key                                                                                                                                             |
+| `OPENROUTER_BASE_URL`     | `https://openrouter.ai/api/v1` | API base URL                                                                                                                                                                       |
+| `TARGET_MODELS`           | 3 preset models                  | Comma-separated model list,**or** a named preset (`free_general` / `paid_flagship` / `mixed_value`, see `make models`)                                               |
+| `MAX_CONCURRENT_REQUESTS` | `3`                            | `asyncio.Semaphore` cap (conservative default for free-tier)                                                                                                                     |
+| `MLFLOW_TRACKING_URI`     | `sqlite:///mlruns.db`          | MLflow tracking database (SQLite)                                                                                                                                                  |
+| `SECURITY_MODE`           | `basic`                        | Named probe set:`basic` (5 built-in), `owasp` (30 probes, OWASP GenAI LLM Top 10 2026), `extended` (15 advanced probes). Also settable per run: `--security`/`SECURITY=` |
+| `SECURITY_PROBES_PATH`    | —                               | Path to a custom probe JSON file (overrides`SECURITY_MODE` above)                                                                                                                |
+| `QUALITY_REPETITIONS`     | `1`                            | Repeats per generic quality prompt; use`2`–`5` only for shortlist stability checks                                                                                            |
 
 > **Note:** `JUDGE_MODEL` no longer exists. Quality judging for undecidable
 > responses is done by 3 GitHub Copilot agents (`@judge-anthropic`,
@@ -231,12 +250,13 @@ limits, the validation protocol and the comparison procedure with `gen-e2-eval`.
 
 ### Troubleshooting first runs
 
-| Symptom | Likely cause | Fix |
-| --- | --- | --- |
-| `make verify` fails with "API key check failed" / HTTP 401 | `OPENROUTER_API_KEY` in `.env` is missing, wrong, or the shell has a stale exported env var overriding `.env` | Check `openrouter.ai/keys`; run `env \| grep OPENROUTER_API_KEY` — if it's set in the shell, `unset OPENROUTER_API_KEY` so `.env` takes effect again |
-| `make verify` lists model ID(s) "not in the live OpenRouter catalog" | Typo or a discontinued/renamed `:free` slug in `TARGET_MODELS` | Check [openrouter.ai/models](https://openrouter.ai/models) for the current slug |
-| `make collect` warns about the free-tier request cap | `TARGET_MODELS` uses `:free` models and the account has < 10 USD lifetime credits | Buy ≥ 10 USD credits (raises the cap from 50 to 1000 req/day) or reduce `TARGET_MODELS` / `QUALITY_REPETITIONS` |
-| `make merge` errors with "Missing Copilot judge scores" | `@judge-coordinator` (Phase 2) was never run, or was run before the current `make collect` | Run `@judge-coordinator` in Copilot chat against the latest `data/intermediate/judging_*.json`, then retry `make merge` |
+| Symptom                                                                | Likely cause                                                                                                        | Fix                                                                                                                                                         |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `make verify` fails with "API key check failed" / HTTP 401           | `OPENROUTER_API_KEY` in `.env` is missing, wrong, or the shell has a stale exported env var overriding `.env` | Check`openrouter.ai/keys`; run `env \| grep OPENROUTER_API_KEY` — if it's set in the shell, `unset OPENROUTER_API_KEY` so `.env` takes effect again |
+| `make verify` lists model ID(s) "not in the live OpenRouter catalog" | Typo or a discontinued/renamed`:free` slug in `TARGET_MODELS`                                                   | Check[openrouter.ai/models](https://openrouter.ai/models) for the current slug                                                                               |
+| `Unknown model preset '...'`                                         | Typo in`MODELS=`/`TARGET_MODELS=<preset>`                                                                       | Run`make models` to list valid preset names                                                                                                               |
+| `make collect` warns about the free-tier request cap                 | `TARGET_MODELS` uses `:free` models and the account has < 10 USD lifetime credits                               | Buy ≥ 10 USD credits (raises the cap from 50 to 1000 req/day) or reduce`TARGET_MODELS` / `QUALITY_REPETITIONS`                                         |
+| `make merge` errors with "Missing Copilot judge scores"              | `@judge-coordinator` (Phase 2) was never run, or was run before the current `make collect`                      | Run`@judge-coordinator` in Copilot chat against the latest `data/intermediate/judging_*.json`, then retry `make merge`                                |
 
 ---
 

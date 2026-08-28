@@ -9,6 +9,7 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import hashlib
 import json
@@ -27,6 +28,7 @@ from src.api.openrouter_client import (
     OpenRouterError,
 )
 from src.core.config import Settings, get_settings
+from src.core.model_presets import format_model_presets, resolve_models_arg
 from src.evaluators.cost_analyzer import (
     BUILTIN_WORKLOAD_PROFILES,
     AsyncCostAnalyzer,
@@ -139,6 +141,31 @@ def _security_probe_count_for_estimate(probes_path: Path | None) -> int:
         return probe_count(probes_path)
     except (OSError, ValueError):
         return 0
+
+
+# Named, pre-wired security probe sets — see Settings.security_mode.
+_SECURITY_MODE_PROBE_PATHS: dict[str, Path | None] = {
+    "basic": None,
+    "owasp": Path("data/prompts/owasp_probes.json"),
+    "extended": Path("data/prompts/extended_probes.json"),
+}
+
+
+def _resolve_security_probes_path(settings: Settings) -> Path | None:
+    """Return the probes file for this run's security stage, or None for the 5 built-ins.
+
+    ``security_probes_path`` (an explicit custom-file override) always wins;
+    otherwise ``security_mode`` selects a named, pre-wired set so callers
+    never have to remember/type a file path: "basic" (built-in), "owasp"
+    (30 probes / OWASP GenAI LLM Top 10 2026 — required for the dashboard's
+    RSI/heatmap), or "extended" (15 advanced jailbreak/obfuscation probes).
+    """
+    if settings.security_probes_path:
+        return Path(settings.security_probes_path)
+    if settings.security_mode not in _SECURITY_MODE_PROBE_PATHS:
+        valid = ", ".join(sorted(_SECURITY_MODE_PROBE_PATHS))
+        raise ValueError(f"Unknown SECURITY_MODE '{settings.security_mode}'. Valid values: {valid}.")
+    return _SECURITY_MODE_PROBE_PATHS[settings.security_mode]
 
 
 # ── V1 synchronous pipeline (kept for backward compat) ────────────────────────
@@ -293,7 +320,7 @@ class AsyncPipeline:
 
     async def _run_security_stage(self, client: AsyncOpenRouterClient, models: list[str]) -> pd.DataFrame:
         logger.info("[security] Running security scans …")
-        probes_path = Path(self._settings.security_probes_path) if self._settings.security_probes_path else None
+        probes_path = _resolve_security_probes_path(self._settings)
         scanner = AsyncSecurityScanner(client, probes_path=probes_path)
         try:
             df = await scanner.run_full_scan(models=models)
@@ -612,7 +639,7 @@ class CollectPipeline:
         logger.info("Phase 1 — collecting from %d model(s): %s", len(models), models)
 
         prompt_count, _dimension_count, _suite_id = _quality_screen_metadata(_QUALITY_PROMPTS)
-        probes_path = Path(self._settings.security_probes_path) if self._settings.security_probes_path else None
+        probes_path = _resolve_security_probes_path(self._settings)
         estimated_free_tier_requests = _estimate_free_tier_request_volume(
             models,
             quality_prompt_count=prompt_count or 0,
@@ -708,7 +735,7 @@ class CollectPipeline:
 
     async def _run_security_stage(self, client: AsyncOpenRouterClient, models: list[str]) -> pd.DataFrame:
         logger.info("[security] Scanning %d models …", len(models))
-        probes_path = Path(self._settings.security_probes_path) if self._settings.security_probes_path else None
+        probes_path = _resolve_security_probes_path(self._settings)
         try:
             df = await AsyncSecurityScanner(client, probes_path=probes_path).run_full_scan(models)
             logger.info("[security] Scan complete — %d models scanned.", len(df))
@@ -1030,10 +1057,15 @@ def _run_preflight_checks(settings: Settings) -> None:
         except ValueError as exc:
             problems.append(str(exc))
 
-    if settings.security_probes_path:
-        probes_path = Path(settings.security_probes_path)
+    try:
+        probes_path = _resolve_security_probes_path(settings)
+    except ValueError as exc:
+        problems.append(str(exc))
+        probes_path = None
+
+    if probes_path is not None:
         if not probes_path.exists():
-            problems.append(f"SECURITY_PROBES_PATH pointe vers un fichier inexistant : " f"'{probes_path}'.")
+            problems.append(f"Fichier de sondes de sécurité introuvable : " f"'{probes_path}'.")
         else:
             try:
                 probes = json.loads(probes_path.read_text())
@@ -1293,7 +1325,7 @@ class VerifyPipeline:
         logger.info("[VERIFY] \u2705 All %d TARGET_MODELS entries resolve in the live catalog.", len(models))
 
         prompt_count, _dim_count, _suite_id = _quality_screen_metadata(_QUALITY_PROMPTS)
-        probes_path = Path(settings.security_probes_path) if settings.security_probes_path else None
+        probes_path = _resolve_security_probes_path(settings)
         estimated_requests = _estimate_free_tier_request_volume(
             models,
             quality_prompt_count=prompt_count or 0,
@@ -1308,23 +1340,88 @@ class VerifyPipeline:
         logger.info("=" * 70)
 
 
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser.
+
+    The subcommand stays a free-form positional (not argparse ``choices``) so
+    an unknown value falls through to ``main()``'s own dispatch and its
+    ``sys.exit(1)`` error path, instead of argparse's ``sys.exit(2)`` —
+    preserving the CLI's existing exit-code contract.
+    """
+    parser = argparse.ArgumentParser(
+        prog="python -m src.main",
+        description="OpenRouter LLM evaluation pipeline.",
+    )
+    parser.add_argument(
+        "subcommand",
+        nargs="?",
+        default="collect",
+        help="collect|run|merge|dry-run|verify|models (default: collect)",
+    )
+    parser.add_argument(
+        "--models",
+        default=None,
+        help=(
+            "Model-set preset name (see 'python -m src.main models') or a "
+            "comma-separated list of explicit model IDs. Overrides "
+            "TARGET_MODELS for this run only. Ignored by merge/models."
+        ),
+    )
+    parser.add_argument(
+        "--security",
+        choices=sorted(_SECURITY_MODE_PROBE_PATHS),
+        default=None,
+        help=("Security probe set for this run only. Overrides SECURITY_MODE. " "Ignored by merge/models."),
+    )
+    return parser
+
+
+def _settings_override_from_args(args: argparse.Namespace) -> Settings | None:
+    """Build a per-run Settings override from CLI flags, or None if none were given."""
+    overrides: dict[str, Any] = {}
+    if args.models:
+        resolved = resolve_models_arg(args.models, strict=True)
+        overrides["target_models"] = ",".join(resolved)
+    if args.security:
+        overrides["security_mode"] = args.security
+        overrides["security_probes_path"] = None  # an explicit --security wins over a stale custom path
+    if not overrides:
+        return None
+    return get_settings().model_copy(update=overrides)
+
+
+_SETTINGS_AWARE_SUBCOMMANDS = ("run", "collect", "dry-run", "dryrun", "verify")
+
+
 def main() -> None:
     try:
-        subcommand = sys.argv[1] if len(sys.argv) > 1 else "collect"
+        args = _build_arg_parser().parse_args()
+        subcommand = args.subcommand
+
+        if subcommand == "models":
+            print(format_model_presets())
+            return
+
+        settings = _settings_override_from_args(args) if subcommand in _SETTINGS_AWARE_SUBCOMMANDS else None
+
         if subcommand in ("run", "collect"):
-            pending = asyncio.run(CollectPipeline().run())
+            pipeline = CollectPipeline(settings) if settings else CollectPipeline()
+            pending = asyncio.run(pipeline.run())
             logger.info("Pending file: %s", pending)
         elif subcommand == "merge":
             result = MergePipeline().run()
             print(result.to_string(index=False))
         elif subcommand in ("dry-run", "dryrun"):
-            result = asyncio.run(DryRunPipeline().run())
+            dry_run_pipeline = DryRunPipeline(settings) if settings else DryRunPipeline()
+            result = asyncio.run(dry_run_pipeline.run())
             print(result.to_string(index=False))
         elif subcommand == "verify":
-            asyncio.run(VerifyPipeline().run())
+            verify_pipeline = VerifyPipeline(settings) if settings else VerifyPipeline()
+            asyncio.run(verify_pipeline.run())
         else:
             logger.error(
-                "Unknown subcommand '%s'. Usage: python -m src.main " "[collect|merge|dry-run|verify]",
+                "Unknown subcommand '%s'. Usage: python -m src.main "
+                "[collect|merge|dry-run|verify|models] [--models PRESET_OR_LIST] [--security MODE]",
                 subcommand,
             )
             sys.exit(1)

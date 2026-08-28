@@ -1,6 +1,7 @@
 CLAUDE.local.md
 .env
 .env.*
+!.env.example
 *.local.*
 node_modules/
 __pycache__/

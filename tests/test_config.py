@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.core.config import Settings, get_settings
+from src.core.model_presets import MODEL_PRESETS
 
 
 class TestSettingsValidation:
@@ -24,6 +25,14 @@ class TestSettingsValidation:
             target_models='["model-x","model-y"]',
         )
         assert s.target_models_list == ["model-x", "model-y"]
+
+    def test_target_models_accepts_a_bare_preset_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("TARGET_MODELS", raising=False)
+        s = Settings(
+            openrouter_api_key="sk-test",  # type: ignore[arg-type]
+            target_models="paid_flagship",
+        )
+        assert s.target_models_list == list(MODEL_PRESETS["paid_flagship"].models)
 
     def test_default_target_models_are_free(self) -> None:
         # _env_file=None isolates from the repo's real .env (which may list paid
@@ -57,6 +66,10 @@ class TestSettingsValidation:
             Settings(openrouter_api_key="sk-test", max_security_probe_error_rate=-0.1)  # type: ignore[arg-type]
         with pytest.raises(ValidationError):
             Settings(openrouter_api_key="sk-test", max_security_probe_error_rate=1.1)  # type: ignore[arg-type]
+
+    def test_security_mode_defaults_to_basic(self) -> None:
+        s = Settings(openrouter_api_key="sk-test", _env_file=None)  # type: ignore[call-arg]
+        assert s.security_mode == "basic"
 
 
 class TestGetSettings:

@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "open-router-research"
+name = "llm-model-screening"
 version = "0.2.0"
 description = "Doing researches on openrouter llm evaluation considering Security, Performance and cost"
 readme = "README.md"

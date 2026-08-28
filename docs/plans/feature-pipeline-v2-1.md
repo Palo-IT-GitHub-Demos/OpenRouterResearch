@@ -2,7 +2,7 @@
 goal: LLMOps Evaluation Pipeline — V2 (Async, Observability, Hybrid Judge, Dashboard, Red Team)
 version: 2.0
 date_created: 2026-07-10
-owner: open-router-research
+owner: llm-model-screening
 status: 'Planned'
 tags: [feature, refactor, architecture, performance, mlops]
 feature: src/

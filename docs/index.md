@@ -1,4 +1,4 @@
-# OpenRouter Research
+# LLM Model Screening
 
 Pipeline de **screening comparatif et reproductible** des modèles disponibles
 sur OpenRouter. Elle réduit l'espace de recherche en comparant les modèles sur
@@ -33,7 +33,7 @@ Les deux projets répondent à des questions différentes et ne produisent pas
 le même type de décision :
 
 ```text
-OpenRouter Research          gen-e2-eval
+LLM Model Screening          gen-e2-eval
 ──────────────────────────   ────────────────────────────────
 ~200 modèles OpenRouter       5-10 modèles présélectionnés
 
@@ -48,14 +48,14 @@ quadrant de gen-e2-eval avec les colonnes sécurité et TCO.
 
 ### Périmètre et règle de décision
 
-OpenRouter Research inclut :
+LLM Model Screening inclut :
 
 - la comparaison à grande échelle de modèles accessibles via OpenRouter ;
 - un screen de qualité générique, provider-neutral et versionné ;
 - les mesures de coût, de latence et de sécurité ;
 - la production d'une shortlist et de métadonnées traçables pour la suite.
 
-OpenRouter Research n'inclut pas :
+LLM Model Screening n'inclut pas :
 
 - la validation d'un workflow métier ou d'une golden dataset client ;
 - la mesure de la réussite fonctionnelle sur un use case ;

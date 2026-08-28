@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `src/core/model_presets.py` — named, coherent `TARGET_MODELS` presets
+  (`free_general`, `paid_flagship`, `mixed_value`) with `resolve_models_arg()`
+  and `format_model_presets()`. `TARGET_MODELS=<preset name>` now works in
+  `.env`, and `--models`/`MODELS=` accepts a preset name or an explicit
+  comma-separated model list on `collect`/`run`/`dry-run`/`verify`
+- `python -m src.main models` / `make models` — lists every preset and its
+  models without requiring an API key or network access
+- `Settings.security_mode` (`SECURITY_MODE` env var, default `"basic"`) —
+  names the 3 probe sets already shipped (`basic`: 5 built-in, `owasp`:
+  `data/prompts/owasp_probes.json` 30 probes, `extended`:
+  `data/prompts/extended_probes.json` 15 probes) so a full file path no
+  longer has to be typed/remembered. `--security`/`SECURITY=` overrides it
+  per run; an explicit `SECURITY_PROBES_PATH` still wins over both
+- `src/main._resolve_security_probes_path()` — single resolution point for
+  the probes-path precedence above, replacing 5 duplicated call sites;
+  `_run_preflight_checks()` (used by `make dry-run`/`make verify`) now
+  validates whichever probes file `SECURITY_MODE` resolves to, not just an
+  explicit `SECURITY_PROBES_PATH`
+- Argparse-based CLI in `src/main.py` (`--models`, `--security`) — the
+  subcommand itself stays a free-form positional so an unknown subcommand
+  keeps exiting with code 1 (not argparse's own code 2), preserving the
+  existing CLI contract
+- Dashboard "Plan a new run" panel (`dashboard/app.py`) — pick a model
+  preset and a security mode visually and get the ready-to-run `make
+  verify`/`make collect` command; does not launch a run itself
 - `mkdocs.yml` — the documentation site config never existed in this repo (no git
   history at all); `make docs-build`/`make docs-serve` were non-functional
 - `docs/reference/api.md` — mkdocstrings-generated API reference for `src/` and

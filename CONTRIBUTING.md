@@ -1,10 +1,10 @@
-# Contributing to open-router-research
+# Contributing to llm-model-screening
 
 ## Setup
 
 ```bash
 git clone <repo>
-cd open-router-research
+cd llm-model-screening
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev,docs]"
@@ -80,6 +80,13 @@ make docs-build    # build the documentation site strictly
 Place a JSON file with the schema `[{"name": "", "description": "", "message": ""}]`
 anywhere and set `SECURITY_PROBES_PATH=<path>` in `.env`. The scanner will load
 your probes instead of the built-in set.
+
+To switch between the probe sets already shipped in the repo (`basic`
+built-in, `owasp` — `data/prompts/owasp_probes.json`, `extended` —
+`data/prompts/extended_probes.json`), prefer the higher-level `SECURITY_MODE`
+env var or the `--security`/`SECURITY=` override instead of spelling out a
+path — see `make models` and `src/core/model_presets.py` for the equivalent
+on the model-selection side (`TARGET_MODELS`/`--models`/`MODELS=`).
 
 ## Pre-commit hooks
 

@@ -177,7 +177,7 @@ modèles pertinents**.
 
 ### Protocole recommandé
 
-1. exécuter la suite OpenRouter Research sur les mêmes modèles ;
+1. exécuter la suite LLM Model Screening sur les mêmes modèles ;
 2. exécuter `gen-e2-eval` sur les mêmes modèles ;
 3. comparer le top 3 et les classements globaux ;
 4. noter les désaccords et les raisons possibles ;

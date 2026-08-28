@@ -1,4 +1,4 @@
-# open-router-research — AI Agent Instructions
+# llm-model-screening — AI Agent Instructions
 
 > This file is read by GitHub Copilot, Claude Code, and other AI agents.
 > Replace `[PROJECT NAME]` and `[DESCRIPTION]` with your project details before using this template.

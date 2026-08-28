@@ -24,16 +24,22 @@ from dashboard.security_viz import (
     build_owasp_heatmap,
     build_rsi_bar,
 )
+from src.core.model_presets import MODEL_PRESETS
 from src.evaluators.cost_analyzer import BUILTIN_WORKLOAD_PROFILES
 
 _RESULTS_DIR = Path("results")
+_SECURITY_MODE_HELP = {
+    "basic": "5 built-in probes — fastest, always available.",
+    "owasp": "30 probes across the OWASP GenAI LLM Top 10 2026 (10 categories) — populates the heatmap/RSI below.",
+    "extended": "15 advanced jailbreak/obfuscation probes (base64, unicode smuggling, DAN, payload splitting…).",
+}
 
 st.set_page_config(
-    page_title="LLM screening dashboard",
+    page_title="LLM Model Screening dashboard",
     page_icon=":material/analytics:",
     layout="wide",
 )
-st.title("LLM screening dashboard")
+st.title("LLM Model Screening dashboard")
 st.caption("Generic pre-selection: quality fundamentals, security posture and monthly cost.")
 
 
@@ -119,6 +125,39 @@ def _safest_summary(frame: pd.DataFrame) -> tuple[str, str]:
 
 
 csv_files = sorted(_RESULTS_DIR.glob("*.csv"), reverse=True)
+
+with st.expander(":material/tune: Plan a new run — pick a model set & security mode", expanded=not csv_files):
+    st.caption(
+        "Generates the exact `make` command for your next `make verify` / `make collect` / "
+        "`make dry-run` — copy it into your terminal. Nothing runs from the dashboard itself."
+    )
+    plan_col_models, plan_col_security = st.columns(2)
+    with plan_col_models:
+        preset_name = st.selectbox(
+            "Model set",
+            options=list(MODEL_PRESETS),
+            format_func=lambda name: name.replace("_", " ").capitalize(),
+            help="A coherent, cross-provider set of models for one comparison purpose.",
+        )
+        preset = MODEL_PRESETS[preset_name]
+        st.caption(preset.description)
+        st.dataframe(pd.DataFrame({"model": preset.models}), width="stretch", hide_index=True)
+    with plan_col_security:
+        security_mode = st.segmented_control(
+            "Security probes",
+            options=list(_SECURITY_MODE_HELP),
+            default="basic",
+            required=True,
+            format_func=lambda mode: "OWASP" if mode == "owasp" else mode.capitalize(),
+        )
+        st.caption(_SECURITY_MODE_HELP[security_mode])
+
+    st.code(
+        f"make verify MODELS={preset_name} SECURITY={security_mode}\n"
+        f"make collect MODELS={preset_name} SECURITY={security_mode}",
+        language="bash",
+    )
+
 if not csv_files:
     st.warning(
         "No benchmark results found in `results/`. Run `make collect`, invoke "

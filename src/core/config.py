@@ -15,6 +15,8 @@ from typing import Any
 from pydantic import Field, SecretStr, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.core.model_presets import resolve_models_arg
+
 
 class Settings(BaseSettings):
     """Application settings resolved from environment variables or a .env file."""
@@ -48,7 +50,12 @@ class Settings(BaseSettings):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def target_models_list(self) -> list[str]:
-        """Parse the comma-separated ``TARGET_MODELS`` env var into a list."""
+        """Parse ``TARGET_MODELS`` into a list, expanding a bare preset name.
+
+        Accepts a JSON array, a comma-separated model list, or (new) a single
+        named preset (see ``src.core.model_presets.MODEL_PRESETS``) such as
+        ``TARGET_MODELS=paid_flagship`` — resolved via ``resolve_models_arg``.
+        """
         raw = self.target_models.strip()
         if raw.startswith("["):
             import json  # noqa: PLC0415
@@ -59,7 +66,7 @@ class Settings(BaseSettings):
                     return decoded
             except Exception:  # noqa: BLE001
                 pass
-        return [m.strip() for m in raw.split(",") if m.strip()]
+        return resolve_models_arg(raw)
 
     # ── HTTP client ────────────────────────────────────────────────────────────
     request_timeout: float = 60.0
@@ -70,7 +77,16 @@ class Settings(BaseSettings):
     mlflow_tracking_uri: str = "sqlite:///mlruns.db"
 
     # ── Security ───────────────────────────────────────────────────────────────
-    # Optional path to a JSON file containing custom security probes.
+    # Named probe set for this run: "basic" (5 built-in probes, default),
+    # "owasp" (data/prompts/owasp_probes.json — 30 probes, OWASP GenAI LLM Top
+    # 10 2026, required for the dashboard's RSI/heatmap), or "extended"
+    # (data/prompts/extended_probes.json — 15 advanced jailbreak/obfuscation
+    # probes). Resolved by ``main._resolve_security_probes_path``. Ignored
+    # when security_probes_path below is set (that always wins).
+    security_mode: str = "basic"
+
+    # Optional path to a JSON file containing custom security probes —
+    # overrides security_mode above.
     security_probes_path: str | None = None
 
     # ── Quality screen ─────────────────────────────────────────────────────────

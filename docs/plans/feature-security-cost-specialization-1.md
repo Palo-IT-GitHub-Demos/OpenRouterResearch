@@ -2,7 +2,7 @@
 goal: Security & Cost Specialization — Red-Team Reference + Pricing Intelligence
 version: 1.0
 date_created: 2026-08-13
-owner: open-router-research
+owner: llm-model-screening
 status: 'In progress'
 tags: [feature, security, cost, red-team, owasp, architecture]
 feature: src/evaluators/
@@ -12,7 +12,7 @@ feature: src/evaluators/
 
 ![Status: Planned](https://img.shields.io/badge/status-Planned-blue)
 
-Ce plan spécialise `OpenRouterResearch` sur les deux axes que `gen-e2-eval` ne couvre pas :
+Ce plan spécialise `llm-model-screening` sur les deux axes que `gen-e2-eval` ne couvre pas :
 la **sécurité adversariale** (red-team) et l'**intelligence tarifaire** (cost modeling).
 L'objectif est d'en faire la référence complémentaire à `gen-e2-eval` :
 là où gen-e2-eval mesure la performance fonctionnelle, ce projet mesure la **robustesse
@@ -388,7 +388,7 @@ python scripts/export_gen_e2_registry.py \
 
 Format de sortie :
 ```yaml
-# Généré par OpenRouterResearch — export gen-e2-eval compatible
+# Généré par LLM Model Screening — export gen-e2-eval compatible
 # Date: 2026-08-13 | Profil: enterprise_qa
 schema_version: 1
 source: openrouter-research
