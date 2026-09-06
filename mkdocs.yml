@@ -40,6 +40,7 @@ nav:
   - Accueil: index.md
   - Workflow: workflow.md
   - "Méthodologie qualité": quality-methodology.md
+  - "Méthodologie sécurité": security-methodology.md
   - "Validation qualité":
       - "Revue v1": quality-validation/review-v1.md
       - "Template comparaison gen-e2-eval": quality-validation/gen-e2-eval-comparison-template.md
@@ -48,6 +49,7 @@ nav:
   - ADR:
       - "0001 — Architecture initiale": adr/0001-architecture-initiale.md
   - Plans:
+      - "Roadmap d'amélioration (2026)": plans/project-improvement-roadmap-2026.md
       - "V2 — Pipeline async, observabilité, juge hybride": plans/feature-pipeline-v2-1.md
       - "Sécurité & coût — spécialisation": plans/feature-security-cost-specialization-1.md
   - Maintenance de la documentation: documentation.md

@@ -153,6 +153,12 @@ class ExperimentTracker:
         finally:
             os.unlink(tmp_path)
 
+    def log_run_metadata(self, metadata: dict[str, str | int | float | bool]) -> None:
+        """Log non-sensitive run provenance as MLflow parameters."""
+        if not self._enabled or not metadata:
+            return
+        mlflow.log_params({key: str(value) for key, value in metadata.items()})
+
     # ── Context manager ────────────────────────────────────────────────────────
 
     def __enter__(self) -> ExperimentTracker:

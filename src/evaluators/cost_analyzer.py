@@ -38,6 +38,9 @@ _ACTUAL_COST_SUMMARY_COLUMNS = [
     "actual_completion_tokens",
     "actual_total_tokens",
     "actual_latency_ms",
+    "actual_latency_p50_ms",
+    "actual_latency_p95_ms",
+    "actual_tokens_per_second",
     "actual_model_mismatch_call_count",
 ]
 
@@ -74,9 +77,13 @@ def summarize_actual_call_costs(call_costs_df: pd.DataFrame) -> pd.DataFrame:
     work_df["actual_cost_reported"] = cost_series.notna().astype("int32")
     work_df["actual_cost_credits_safe"] = cost_series.fillna(0.0)
 
-    for column in ("prompt_tokens", "completion_tokens", "total_tokens", "latency_ms"):
+    for column in ("prompt_tokens", "completion_tokens", "total_tokens", "latency_ms", "network_latency_ms"):
         raw_values = work_df[column] if column in work_df.columns else pd.Series(pd.NA, index=work_df.index)
         work_df[column] = pd.to_numeric(raw_values, errors="coerce").fillna(0.0)
+    # Legacy call-cost ledgers predate network_latency_ms — fall back to the
+    # wall-clock value rather than silently reporting a network time of 0.
+    if "network_latency_ms" not in call_costs_df.columns:
+        work_df["network_latency_ms"] = work_df["latency_ms"]
 
     if "resolved_model" in work_df.columns:
         work_df["model_mismatch"] = (
@@ -94,7 +101,13 @@ def summarize_actual_call_costs(call_costs_df: pd.DataFrame) -> pd.DataFrame:
             actual_prompt_tokens=("prompt_tokens", "sum"),
             actual_completion_tokens=("completion_tokens", "sum"),
             actual_total_tokens=("total_tokens", "sum"),
+            # Wall-clock sum, kept for backward compatibility — includes time spent
+            # queueing behind MAX_CONCURRENT_REQUESTS and retry back-off waits, so it
+            # is not a per-call latency figure. Use the network_* columns below instead.
             actual_latency_ms=("latency_ms", "sum"),
+            actual_latency_p50_ms=("network_latency_ms", lambda s: float(s.quantile(0.5))),
+            actual_latency_p95_ms=("network_latency_ms", lambda s: float(s.quantile(0.95))),
+            actual_network_latency_ms_sum=("network_latency_ms", "sum"),
             actual_model_mismatch_call_count=("model_mismatch", "sum"),
         )
         .rename(columns={"requested_model": "model"})
@@ -104,6 +117,13 @@ def summarize_actual_call_costs(call_costs_df: pd.DataFrame) -> pd.DataFrame:
     )
     summary_df["actual_cost_coverage_rate"] = (
         summary_df["actual_cost_reported_call_count"] / summary_df["actual_cost_call_count"]
+    )
+    # Throughput: total completion tokens generated ÷ total network time spent
+    # generating them (not an average of per-call ratios, which a few short calls
+    # would otherwise dominate).
+    network_seconds = summary_df["actual_network_latency_ms_sum"] / 1_000.0
+    summary_df["actual_tokens_per_second"] = (summary_df["actual_completion_tokens"] / network_seconds).where(
+        network_seconds > 0
     )
     return summary_df[_ACTUAL_COST_SUMMARY_COLUMNS].sort_values("model").reset_index(drop=True)
 

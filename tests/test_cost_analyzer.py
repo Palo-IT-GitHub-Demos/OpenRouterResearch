@@ -189,6 +189,7 @@ class TestActualCallCostSummary:
                 actual_cost_credits=0.0,
                 cost_source="openrouter_usage",
                 latency_ms=120.0,
+                network_latency_ms=120.0,
             ),
             CallCostRecord(
                 usage_context="security_scan",
@@ -201,6 +202,7 @@ class TestActualCallCostSummary:
                 actual_cost_credits=None,
                 cost_source="unavailable",
                 latency_ms=140.0,
+                network_latency_ms=140.0,
             ),
         )
 
@@ -228,6 +230,7 @@ class TestActualCallCostSummary:
                 actual_cost_credits=0.001,
                 cost_source="openrouter_usage",
                 latency_ms=200.0,
+                network_latency_ms=150.0,
             ),
             CallCostRecord(
                 usage_context="security_scan",
@@ -240,6 +243,7 @@ class TestActualCallCostSummary:
                 actual_cost_credits=0.0002,
                 cost_source="openrouter_usage",
                 latency_ms=50.0,
+                network_latency_ms=50.0,
             ),
         )
 
@@ -252,3 +256,65 @@ class TestActualCallCostSummary:
         assert row["actual_completion_tokens"] == 60
         assert row["actual_latency_ms"] == pytest.approx(250.0)
         assert row["actual_model_mismatch_call_count"] == 1
+
+    def test_latency_percentiles_and_throughput_use_network_latency_not_wall_clock(self) -> None:
+        # latency_ms includes queueing/retry time; network_latency_ms is the
+        # actual request/response duration once the call was in flight.
+        records = (
+            CallCostRecord(
+                usage_context="quality_screen",
+                requested_model="model-a",
+                resolved_model="model-a",
+                generation_id="gen-1",
+                prompt_tokens=10,
+                completion_tokens=40,
+                total_tokens=50,
+                actual_cost_credits=0.001,
+                cost_source="openrouter_usage",
+                latency_ms=5_000.0,  # e.g. queued for 4.85s behind other calls
+                network_latency_ms=150.0,
+            ),
+            CallCostRecord(
+                usage_context="quality_screen",
+                requested_model="model-a",
+                resolved_model="model-a",
+                generation_id="gen-2",
+                prompt_tokens=10,
+                completion_tokens=20,
+                total_tokens=30,
+                actual_cost_credits=0.001,
+                cost_source="openrouter_usage",
+                latency_ms=50.0,
+                network_latency_ms=50.0,
+            ),
+        )
+
+        row = summarize_actual_call_costs(call_costs_to_dataframe(records)).iloc[0]
+
+        # Percentiles reflect the fast/slow network calls (50, 150), never the
+        # 5-second wall-clock figure that included queueing.
+        assert row["actual_latency_p50_ms"] == pytest.approx(100.0)
+        assert row["actual_latency_p95_ms"] == pytest.approx(145.0)
+        # 60 completion tokens over 0.2s of network time = 300 tokens/second.
+        assert row["actual_tokens_per_second"] == pytest.approx(300.0)
+
+    def test_legacy_ledger_without_network_latency_falls_back_to_wall_clock(self) -> None:
+        legacy_df = pd.DataFrame(
+            [
+                {
+                    "requested_model": "model-a",
+                    "resolved_model": "model-a",
+                    "actual_cost_credits": 0.001,
+                    "prompt_tokens": 10,
+                    "completion_tokens": 10,
+                    "total_tokens": 20,
+                    "latency_ms": 100.0,
+                    # No network_latency_ms column at all — pre-Phase-D ledger.
+                }
+            ]
+        )
+
+        row = summarize_actual_call_costs(legacy_df).iloc[0]
+
+        assert row["actual_latency_p50_ms"] == pytest.approx(100.0)
+        assert row["actual_latency_p95_ms"] == pytest.approx(100.0)

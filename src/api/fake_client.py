@@ -110,10 +110,18 @@ class _FakeChoice:
 @dataclass
 class _FakeChatCompletion:
     choices: list[_FakeChoice] = field(default_factory=list)
+    # Mirrors the provenance fields the collector reads off a real completion;
+    # without them every dry-run response is recorded as a transport failure.
+    id: str | None = None
+    model: str | None = None
 
 
-def _make_completion(content: str) -> _FakeChatCompletion:
-    return _FakeChatCompletion(choices=[_FakeChoice(message=_FakeMessage(content=content))])
+def _make_completion(content: str, model: str | None = None) -> _FakeChatCompletion:
+    return _FakeChatCompletion(
+        choices=[_FakeChoice(message=_FakeMessage(content=content))],
+        id=f"dry-run-{_stable_int(model or '', content):x}",
+        model=model,
+    )
 
 
 class FakeAsyncOpenRouterClient:
@@ -162,9 +170,10 @@ class FakeAsyncOpenRouterClient:
                 actual_cost_credits=None,
                 cost_source="dry_run",
                 latency_ms=0.0,
+                network_latency_ms=0.0,
             )
         )
-        return _make_completion(content)
+        return _make_completion(content, model)
 
     async def get_models(self) -> list[dict[str, Any]]:
         """Return synthetic pricing metadata for every configured target model."""

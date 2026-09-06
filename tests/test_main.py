@@ -16,6 +16,7 @@ import pytest
 
 from src.core.config import Settings
 from src.core.model_presets import MODEL_PRESETS
+from src.core.run_manifest import build_run_manifest, inspect_run_manifest
 from src.evaluators.quality_judge import CollectResult
 from src.main import (
     _FREE_TIER_RPD_NO_CREDITS,
@@ -26,6 +27,7 @@ from src.main import (
     _estimate_free_tier_request_volume,
     _resolve_security_probes_path,
     _unknown_target_models,
+    _validate_pending_payload,
     _warn_on_free_tier_request_volume,
     main,
 )
@@ -47,9 +49,11 @@ def _pending_with_two_models() -> dict[str, object]:
                 "quality_dimension": "reasoning",
                 "weight": 1.0,
                 "alias_map": alias_map,
+                # Keyed by alias, matching the real schema produced by
+                # AsyncQualityJudge.run_collect (never by model_id directly).
                 "responses": {
-                    "openai/gpt-4o": "Recursion is when a function calls itself.",
-                    "anthropic/claude-3.5": "Recursion means self-reference in a function.",
+                    "A": "Recursion is when a function calls itself.",
+                    "B": "Recursion means self-reference in a function.",
                 },
             }
         ],
@@ -133,8 +137,15 @@ class TestRebuildQualityDf:
         by_model = {row["model"]: row["score"] for row in result.to_dict(orient="records")}
         assert by_model["openai/gpt-4o"] == 3.0  # avg(4, 2)
         assert by_model["anthropic/claude-3.5"] == 3.0  # avg(2, 4)
+        assert json.loads(result.loc[result["model"] == "openai/gpt-4o", "judge_verdicts"].iloc[0]) == [
+            {"judge_id": "claude", "score": 4, "reasoning": "Good."},
+            {"judge_id": "gpt", "score": 2, "reasoning": "Overstated."},
+        ]
 
-    def test_unknown_alias_is_skipped_not_misattributed(self, tmp_path: Path) -> None:
+    def test_unknown_alias_causes_a_coverage_gap_error(self, tmp_path: Path) -> None:
+        # A judge that misspells/invents an alias never actually scored the
+        # real one — this is indistinguishable from silently dropping that
+        # model's response, which must fail fast rather than merge partial data.
         pending = _pending_with_two_models()
         scores_path = _write_scores_file(
             tmp_path,
@@ -145,11 +156,93 @@ class TestRebuildQualityDf:
             ],
         )
 
+        with pytest.raises(ValueError, match=r"scored 1/2 expected"):
+            MergePipeline._rebuild_quality_df(pending, scores_path)
+
+    def test_prompt_and_response_are_carried_through(self, tmp_path: Path) -> None:
+        pending = _pending_with_two_models()
+        scores_path = _write_scores_file(
+            tmp_path,
+            "claude",
+            judgments=[
+                {"alias": "A", "score": 5, "reasoning": "Correct."},
+                {"alias": "B", "score": 4, "reasoning": "Also fine."},
+            ],
+        )
+
         result = MergePipeline._rebuild_quality_df(pending, scores_path)
 
-        by_model = {row["model"]: row["score"] for row in result.to_dict(orient="records")}
-        assert by_model["openai/gpt-4o"] == 5
-        assert "anthropic/claude-3.5" not in by_model
+        by_model = {row["model"]: row for row in result.to_dict(orient="records")}
+        assert by_model["openai/gpt-4o"]["prompt"] == "Explain recursion."
+        assert by_model["openai/gpt-4o"]["response"] == "Recursion is when a function calls itself."
+        assert by_model["anthropic/claude-3.5"]["response"] == "Recursion means self-reference in a function."
+
+    def test_judge_disagreement_is_the_range_across_judges(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pending = _pending_with_two_models()
+        monkeypatch.setattr("src.main._INTERMEDIATE_DIR", tmp_path)
+        _write_scores_file(
+            tmp_path,
+            "claude",
+            judgments=[
+                {"alias": "A", "score": 5, "reasoning": "Meets all criteria."},
+                {"alias": "B", "score": 5, "reasoning": "Meets all criteria."},
+            ],
+        )
+        gpt_scores = tmp_path / "scores_20260101_000000_gpt.json"
+        gpt_scores.write_text(
+            json.dumps(
+                {
+                    "judge": "gpt",
+                    "timestamp": "20260101_000000",
+                    "scores": [
+                        {
+                            "prompt_id": 1,
+                            "attempt": 0,
+                            "judgments": [
+                                {"alias": "A", "score": 3, "reasoning": "Lacks concrete success criteria."},
+                                {"alias": "B", "score": 5, "reasoning": "Meets all criteria."},
+                            ],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = MergePipeline._rebuild_quality_df(pending, None)
+
+        by_model = {row["model"]: row["judge_disagreement"] for row in result.to_dict(orient="records")}
+        assert by_model["openai/gpt-4o"] == 2  # scores 5, 3
+        assert by_model["anthropic/claude-3.5"] == 0  # scores 5, 5
+
+    def test_missing_alias_in_one_judge_file_raises_a_coverage_error(self, tmp_path: Path) -> None:
+        pending = _pending_with_two_models()
+        scores_path = _write_scores_file(
+            tmp_path,
+            "claude",
+            # Alias B is never scored at all — a silent partial-coverage drop.
+            judgments=[{"alias": "A", "score": 5, "reasoning": "Correct."}],
+        )
+
+        with pytest.raises(ValueError, match=r"Judge 'claude' scored 1/2 expected"):
+            MergePipeline._rebuild_quality_df(pending, scores_path)
+
+    def test_full_coverage_by_every_judge_does_not_raise(self, tmp_path: Path) -> None:
+        pending = _pending_with_two_models()
+        scores_path = _write_scores_file(
+            tmp_path,
+            "claude",
+            judgments=[
+                {"alias": "A", "score": 5, "reasoning": "Correct."},
+                {"alias": "B", "score": 4, "reasoning": "Also fine."},
+            ],
+        )
+
+        result = MergePipeline._rebuild_quality_df(pending, scores_path)
+
+        assert len(result) == 2
 
 
 class TestMergePipelineFailFast:
@@ -163,10 +256,57 @@ class TestMergePipelineFailFast:
             json.dumps(_pending_with_two_models()),
             encoding="utf-8",
         )
+        # Hermetic: without this, the legacy-fallback glob in _rebuild_quality_df
+        # reads the real data/intermediate/ directory and can pick up an unrelated
+        # leftover scores_*.json file from a real run.
+        monkeypatch.setattr("src.main._INTERMEDIATE_DIR", tmp_path)
         monkeypatch.setattr("src.main._RESULTS_DIR", tmp_path / "results")
 
         with pytest.raises(ValueError, match="Missing Copilot judge scores"):
             MergePipeline().run(pending_path=pending_path)
+
+
+class TestPendingPayloadContract:
+    def test_accepts_pending_payload_with_matching_aliases(self) -> None:
+        _validate_pending_payload(_pending_with_two_models())
+
+    def test_rejects_pending_payload_with_mismatched_response_aliases(self) -> None:
+        pending = _pending_with_two_models()
+        pending["pending_judgments"][0]["responses"] = {"A": "only one response"}  # type: ignore[index]
+
+        with pytest.raises(ValueError, match="responses do not match alias_map"):
+            _validate_pending_payload(pending)
+
+    def test_rejects_pending_payload_with_invalid_phase_field(self) -> None:
+        pending = _pending_with_two_models()
+        pending["security"] = {"model": "openai/gpt-4o"}
+
+        with pytest.raises(ValueError, match="'security' must be a list"):
+            _validate_pending_payload(pending)
+
+
+class TestRunManifest:
+    def test_manifest_detects_modified_artifact(self, tmp_path: Path) -> None:
+        artifact = tmp_path / "benchmark.csv"
+        artifact.write_text("model,score\na,5\n", encoding="utf-8")
+        manifest = tmp_path / "run.manifest.json"
+        manifest.write_text(
+            json.dumps(build_run_manifest(run_id="run-1", metadata={}, artifacts=[artifact], root=tmp_path)),
+            encoding="utf-8",
+        )
+        artifact.write_text("model,score\na,1\n", encoding="utf-8")
+
+        assert inspect_run_manifest(manifest, tmp_path) == ["Checksum mismatch: benchmark.csv"]
+
+    def test_manifest_reports_missing_artifact(self, tmp_path: Path) -> None:
+        artifact = tmp_path / "benchmark.csv"
+        artifact.write_text("model,score\na,5\n", encoding="utf-8")
+        payload = build_run_manifest(run_id="run-1", metadata={}, artifacts=[artifact], root=tmp_path)
+        artifact.unlink()
+        manifest = tmp_path / "run.manifest.json"
+        manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+        assert inspect_run_manifest(manifest, tmp_path) == ["Missing artifact: benchmark.csv"]
 
 
 class TestCollectErrorBudget:
@@ -211,6 +351,23 @@ class TestCollectErrorBudget:
             max_quality_collection_error_rate=0.5,
             max_security_probe_error_rate=0.5,
         )
+
+
+class TestDryRunFakeCompletion:
+    async def test_fake_completion_carries_the_provenance_fields_the_collector_reads(self) -> None:
+        from src.api.fake_client import FakeAsyncOpenRouterClient
+
+        client = FakeAsyncOpenRouterClient(Settings(openrouter_api_key="test-key"))
+        completion = await client.chat_completion(
+            model="vendor/model-x",
+            messages=[{"role": "user", "content": "What is the capital of Australia?"}],
+        )
+
+        # Missing id/model made every dry-run response look like a transport
+        # failure, silently emptying the quality axis of the pre-flight check.
+        assert completion.id
+        assert completion.model == "vendor/model-x"
+        assert completion.choices[0].message.content == "Canberra"
 
 
 class TestUnknownTargetModels:
@@ -414,6 +571,69 @@ class TestCollectPipelineRun:
         assert len(payload["deterministic_scores"]) == 1
         assert payload["pricing"][0]["model_id"] == "openai/gpt-4o-mini"
 
+    async def test_judging_file_uses_scrubbed_responses_pending_file_stays_raw(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("src.main._INTERMEDIATE_DIR", tmp_path)
+        _patch_async_client_context_manager(monkeypatch)
+        pricing_df = pd.DataFrame(
+            [
+                {
+                    "model_id": "openai/gpt-4o-mini",
+                    "prompt_price_per_token": 1e-7,
+                    "completion_price_per_token": 3e-7,
+                    "context_length": 128000,
+                }
+            ]
+        )
+        security_df = pd.DataFrame(
+            [
+                {
+                    "model": "openai/gpt-4o-mini",
+                    "leak_count": 0,
+                    "is_vulnerable": False,
+                    "probe_count": 5,
+                    "probe_error_count": 0,
+                }
+            ]
+        )
+        collect_result = CollectResult(
+            deterministic_rows=[],
+            pending_judgments=[
+                {
+                    "prompt_id": 1,
+                    "attempt": 0,
+                    "prompt": "Write a concise reply.",
+                    "prompt_preview": "Write a concise reply.",
+                    "category": "generic_judgment",
+                    "quality_dimension": "concise_communication",
+                    "weight": 1.0,
+                    "judge_criteria": ["Be helpful."],
+                    "reference_answer": None,
+                    "alias_map": {"A": "openai/gpt-4o-mini"},
+                    "responses": {"A": "As an AI developed by OpenAI, here you go."},
+                    "responses_for_judging": {"A": "As an AI developed by [assistant], here you go."},
+                }
+            ],
+            collection_errors=[],
+            prompt_count=1,
+            repetitions=1,
+        )
+        self._patch_stages(monkeypatch, pricing_df=pricing_df, security_df=security_df, collect_result=collect_result)
+        settings = Settings(openrouter_api_key="sk-test", target_models="openai/gpt-4o-mini")  # type: ignore[arg-type]
+
+        pending_path = await CollectPipeline(settings).run()
+
+        pending_payload = json.loads(pending_path.read_text())
+        raw_response = pending_payload["pending_judgments"][0]["responses"]["A"]
+        assert "OpenAI" in raw_response
+
+        judging_path = pending_path.parent / pending_path.name.replace("pending_", "judging_")
+        judging_payload = json.loads(judging_path.read_text())
+        judged_response = judging_payload["pending_judgments"][0]["responses"]["A"]
+        assert "OpenAI" not in judged_response
+        assert "alias_map" not in judging_payload["pending_judgments"][0]
+
     async def test_logs_error_for_unknown_target_models(
         self,
         tmp_path: Path,
@@ -498,6 +718,108 @@ class TestMergePipelineRun:
         assert result.loc[0, "model"] == "openai/gpt-4o-mini"
         assert list(results_dir.glob("benchmark_*.csv"))
         assert list(results_dir.glob("benchmark_*.json"))
+
+    def test_exports_quality_collection_diagnostics(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pending = {
+            "timestamp": "20260101_000000",
+            "models": ["model-a"],
+            "pricing": [],
+            "security": [],
+            "actual_call_costs": [],
+            "deterministic_scores": [],
+            "pending_judgments": [],
+            "quality_collection_errors": [
+                {
+                    "model": "model-a",
+                    "prompt_id": 4,
+                    "attempt": 0,
+                    "prompt": "What is the capital of Australia?",
+                    "response": "",
+                    "quality_dimension": "factual_sanity",
+                    "error": "OpenRouter API error 503",
+                    "generation_id": None,
+                    "request_sha256": "abc123",
+                }
+            ],
+            "quality_metadata": {"prompt_count": 1, "dimension_count": 1, "repetitions": 1},
+        }
+        pending_path = tmp_path / "pending_20260101_000000.json"
+        pending_path.write_text(json.dumps(pending), encoding="utf-8")
+        results_dir = tmp_path / "results"
+        monkeypatch.setattr("src.main._RESULTS_DIR", results_dir)
+
+        MergePipeline().run(pending_path=pending_path)
+
+        diagnostics = list((results_dir / "quality_diagnostics").glob("*_quality_diagnostics.csv"))
+        assert len(diagnostics) == 1
+        diagnostics_df = pd.read_csv(diagnostics[0])
+        assert diagnostics_df.loc[0, "error"] == "OpenRouter API error 503"
+
+    def test_exports_per_dimension_columns_and_quality_details(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pending = {
+            "timestamp": "20260101_000000",
+            "models": ["openai/gpt-4o-mini"],
+            "pricing": [
+                {
+                    "model_id": "openai/gpt-4o-mini",
+                    "prompt_price_per_token": 1e-7,
+                    "completion_price_per_token": 3e-7,
+                    "context_length": 128000,
+                }
+            ],
+            "security": [{"model": "openai/gpt-4o-mini", "leak_count": 0, "is_vulnerable": False}],
+            "actual_call_costs": [],
+            "deterministic_scores": [
+                {
+                    "model": "openai/gpt-4o-mini",
+                    "prompt_id": 1,
+                    "attempt": 0,
+                    "prompt": 'Return {"status": "ok"} as JSON.',
+                    "response": '{"status": "ok"}',
+                    "score": 5,
+                    "reasoning": "Valid JSON.",
+                    "category": "json_output",
+                    "quality_dimension": "structured_output",
+                    "weight": 1.0,
+                    "source": "deterministic",
+                },
+                {
+                    "model": "openai/gpt-4o-mini",
+                    "prompt_id": 2,
+                    "attempt": 0,
+                    "prompt": "What is 2+2?",
+                    "response": "4",
+                    "score": 3,
+                    "reasoning": "Correct but terse.",
+                    "category": "exact_answer",
+                    "quality_dimension": "elementary_reasoning",
+                    "weight": 1.0,
+                    "source": "deterministic",
+                },
+            ],
+            "pending_judgments": [],
+            "quality_collection_errors": [],
+            "quality_metadata": {"prompt_count": 2, "dimension_count": 2, "repetitions": 1, "suite_id": "abc123"},
+        }
+        pending_path = tmp_path / "pending_20260101_000000.json"
+        pending_path.write_text(json.dumps(pending), encoding="utf-8")
+        results_dir = tmp_path / "results"
+        monkeypatch.setattr("src.main._RESULTS_DIR", results_dir)
+
+        result = MergePipeline().run(pending_path=pending_path)
+
+        assert result.loc[0, "quality_dim_structured_output"] == 5.0
+        assert result.loc[0, "quality_dim_elementary_reasoning"] == 3.0
+
+        details_files = list((results_dir / "quality_details").glob("*_quality_details.csv"))
+        assert len(details_files) == 1
+        details_df = pd.read_csv(details_files[0])
+        assert set(details_df["prompt"]) == {'Return {"status": "ok"} as JSON.', "What is 2+2?"}
+        assert set(details_df["response"]) == {'{"status": "ok"}', "4"}
 
     def test_raises_file_not_found_when_no_pending_file_exists(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

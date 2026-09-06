@@ -61,6 +61,16 @@ class CallCostRecord:
     actual_cost_credits: float | None
     cost_source: str
     latency_ms: float
+    """Wall-clock time since the call was first attempted, including any time spent
+    queueing behind :class:`AsyncOpenRouterClient`'s concurrency semaphore and any
+    retry back-off waits. Kept for backward compatibility with existing exports.
+    """
+    network_latency_ms: float
+    """Time spent on the actual request/response round-trip of the attempt that
+    succeeded — excludes semaphore queueing and retry back-off waits. This is the
+    field that reflects model/provider response time; see docs/quality-methodology.md
+    for why ``latency_ms`` alone over-counts it.
+    """
 
     def as_dict(self) -> dict[str, object]:
         """Return a JSON-serializable representation without prompt content."""
@@ -123,6 +133,7 @@ def _build_call_cost_record(
     requested_model: str,
     usage_context: str,
     latency_ms: float,
+    network_latency_ms: float,
 ) -> CallCostRecord:
     """Build a record from OpenRouter's completion response and usage object."""
     usage = _response_value(completion, "usage")
@@ -141,6 +152,7 @@ def _build_call_cost_record(
         actual_cost_credits=actual_cost_credits,
         cost_source="openrouter_usage" if actual_cost_credits is not None else "unavailable",
         latency_ms=round(latency_ms, 3),
+        network_latency_ms=round(network_latency_ms, 3),
     )
 
 
@@ -164,12 +176,16 @@ class _CallCostLedger:
         requested_model: str,
         usage_context: str,
         started_at: float,
+        network_started_at: float | None = None,
     ) -> None:
+        now = perf_counter()
         record = _build_call_cost_record(
             completion,
             requested_model=requested_model,
             usage_context=usage_context,
-            latency_ms=(perf_counter() - started_at) * 1_000,
+            latency_ms=(now - started_at) * 1_000,
+            network_latency_ms=(now - (network_started_at if network_started_at is not None else started_at))
+            * 1_000,
         )
         with self._call_costs_lock:
             self._call_costs.append(record)
@@ -345,6 +361,9 @@ class AsyncOpenRouterClient(_CallCostLedger):
             ):
                 with attempt:
                     async with self._semaphore:
+                        # Captured after the semaphore is acquired so network_latency_ms
+                        # excludes time spent queueing behind MAX_CONCURRENT_REQUESTS.
+                        network_started_at = perf_counter()
                         completion = await self._client.chat.completions.create(
                             model=model,
                             messages=messages,  # type: ignore[arg-type]
@@ -355,6 +374,7 @@ class AsyncOpenRouterClient(_CallCostLedger):
                             requested_model=model,
                             usage_context=usage_context,
                             started_at=started_at,
+                            network_started_at=network_started_at,
                         )
                         return completion
         except openai.APIStatusError as exc:

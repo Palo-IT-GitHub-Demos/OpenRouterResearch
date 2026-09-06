@@ -86,16 +86,143 @@ imposé à l'entrée par le schéma Pydantic `QualityPrompt` — voir la décisi
 | Dimension | Prompts | Catégorie(s) | Mode de correction |
 | --- | --- | --- | --- |
 | structured_output | 3 | json_output | déterministe (JSON strict) |
-| code_contract | 1 | code_generation | déterministe (syntaxe Python, non exécutée) |
+| code_correctness | 1 | code_generation | déterministe (syntaxe Python + contrat de fonction, non exécuté) |
 | factual_sanity | 3 | factual_sanity | déterministe (réponse exacte) |
 | elementary_reasoning | 3 | exact_answer, logical_reasoning | déterministe (réponse exacte) |
 | instruction_reliability | 4 | instruction_following (3), generic_judgment (1) | 3 déterministes + 1 jugé |
 | concise_communication | 2 | generic_judgment | jugé à l'aveugle |
+| output_format_compliance | dérivée | tout prompt `strict_output` | déterministe (respect littéral du format) |
 
 13 prompts sur 16 sont donc corrigés sans aucun appel à un juge externe ; les
 3 prompts restants suivent le protocole de jugement à l'aveugle ci-dessus.
 
-## 3. Couverture du périmètre
+### Contenu et format sont notés séparément
+
+Un prompt marqué `strict_output` produit **deux lignes** : son score de contenu
+(la réponse est-elle juste ?) dans sa dimension d'origine, et un score de
+respect du format dans la dimension dérivée `output_format_compliance`.
+
+Avant cette séparation, une réponse correcte encadrée par des ` ``` ` était
+notée 1/5 sur `code_contract` : la dimension mesurait le formatage tout en
+étant lue comme une compétence de codage. Les deux signaux sont désormais
+lisibles indépendamment.
+
+### Deux échelles, publiées séparément
+
+`avg_quality_score` agrège deux échelles qui ne sont pas équivalentes : les
+contrôles déterministes sont du succès/échec rendu en **1 ou 5**, tandis que
+les juges notent en continu de 1 à 5. Comme 13 prompts sur 16 sont
+déterministes, le chiffre global est dominé par du binaire.
+
+`avg_quality_score_deterministic` et `avg_quality_score_judged` sont donc
+publiés côte à côte dans le CSV et les deux dashboards, pour voir laquelle des
+deux échelles fait le classement. De même, `quality_pass_rate` (part des
+prompts ≥ 4/5) peut être **identique pour plusieurs modèles** — c'est un
+indicateur de couverture, pas un classement.
+
+### Prompts écartés pour corruption d'entrée suspectée
+
+Quand **tous** les modèles d'un run manquent un prompt dont la réponse de
+référence est connue et fixe, la cause commune est bien plus probablement la
+requête réellement arrivée chez le fournisseur (redaction par un proxy,
+substitution de gabarit, troncature) qu'une défaillance simultanée de modèles
+sans lien entre eux.
+
+Le prompt est alors retiré des agrégats **et de leur dénominateur** (il n'est
+donc pas non plus compté comme un trou de couverture), et compté dans
+`quality_excluded_prompt_count`. La détection est volontairement étroite : elle
+ne considère que les prompts à réponse de référence et au moins deux modèles,
+de sorte qu'un prompt simplement difficile, ou mal formaté par tout le monde,
+n'est jamais écarté.
+
+Conformément à l'invariant de préservation des preuves, **ni la réponse ni le
+score brut ne sont réécrits** : la ligne reste consultable dans
+`results/quality_details/` avec
+`verification_status=suspected_input_corruption`.
+
+## 3. Fiabilité et biais du panel de juges
+
+### Biais d'auto-préférence
+
+Le panel compte 3 juges Copilot, chacun adossé à un fournisseur (Claude/Anthropic,
+GPT-4o/OpenAI, Gemini/Google) qui est aussi l'un des fournisseurs potentiellement
+présents dans `TARGET_MODELS`. Un juge peut donc, sans le savoir, noter une
+réponse produite par un modèle de son propre fournisseur.
+
+**Ce que l'aveuglement par alias couvre** : le juge ne reçoit jamais `alias_map`
+ni l'identifiant du modèle — seulement une lettre (A/B/C…) et le texte de la
+réponse (voir `.github/agents/judge-*.agent.md`, "Blind evaluation").
+
+**Ce que l'aveuglement par alias ne couvre pas** : une réponse qui se
+présente elle-même ("As an AI developed by Anthropic…") réintroduit l'indice
+que l'alias devait masquer. Depuis 2026-09-03, `quality_judge.py::_scrub_self_identification`
+retire, de manière best-effort, les tournures explicites d'auto-présentation
+(cf. `I'm <vendor>`, `As <vendor>`, `developed/created/trained/made by <vendor>`)
+avant que le texte n'atteigne le fichier `judging_{ts}.json` — la copie brute
+reste intacte dans `pending_{ts}.json` pour l'évidence/l'audit, conformément à
+l'invariant "ne jamais réécrire une réponse". Cette détection est **best-effort,
+pas une garantie** : une divulgation paraphrasée ou indirecte n'est pas
+interceptée.
+
+**Aucune correction de biais n'est appliquée après coup** (pas de pondération
+différente par juge, pas d'exclusion d'un juge sur ses propres modèles) : le
+panel reste 3 juges symétriques. Si un futur audit constate un biais
+systématique mesurable (ex. un juge note significativement plus haut les
+réponses de son propre fournisseur une fois l'alias percé), la mitigation à
+envisager est un pool de juges dédié, distinct des fournisseurs évalués — non
+implémenté à ce jour.
+
+### Désaccord inter-juges
+
+`judge_disagreement` (colonne du CSV principal et de `results/quality_details/`)
+est l'étendue (max − min) des 3 scores bruts avant moyenne, par
+(modèle, prompt, tentative). `quality_judge_disagreement_rate` résume, par
+modèle, la part des prompts jugés dont l'étendue est ≥ 2 — un désaccord de 2
+points ou plus sur une échelle 1-5 avec 3 juges signifie que le panel n'est pas
+d'accord sur le palier de qualité de la réponse (ex. 3 vs 5), pas seulement sur
+un point d'arrondi (ex. 4 vs 5).
+
+Exemple réel observé (run du 2026-09-02, prompt 15) : OpenAI = 3
+("lacks concrete success criteria"), Anthropic = 4, Google = 5
+("meets all criteria") sur la même réponse — moyenne 4.0, mais
+`judge_disagreement = 2`. La moyenne seule masquait ce désaccord de sévérité
+systématique par juge.
+
+**Choix retenu : conserver la moyenne, publier le désaccord.** L'alternative
+envisagée était de remplacer la moyenne par la médiane. Avec exactement 3
+juges, la médiane revient à choisir le score du juge du milieu et à ignorer
+totalement les deux autres — ce n'est pas nécessairement plus juste qu'une
+moyenne, et cela aurait silencieusement redéfini chaque score déjà publié.
+`judge_disagreement`/`quality_judge_disagreement_rate` rendent le désaccord
+visible sans changer la sémantique historique du score.
+
+### Ancrage de la rubrique 1-5
+
+Le désaccord ci-dessus venait d'une rubrique 1-5 insuffisamment ancrée : rien
+n'indiquait explicitement ce qui sépare un 3 d'un 4 d'un 5 quand une réponse
+remplit les `judge_criteria` mais qu'un juge aurait, par préférence
+personnelle, préféré une formulation différente. Depuis 2026-09-03, les 3
+fichiers `.github/agents/judge-*.agent.md` demandent explicitement au juge de
+compter combien de `judge_criteria` sont remplis avant de noter, avec une règle
+de décision fondée sur ce compte (5 = tous remplis, 3 = au moins un partiellement
+rempli, etc.) et l'interdiction explicite de baisser une note pour une
+préférence subjective absente des critères listés.
+
+### Validation stricte de la couverture avant fusion
+
+Avant 2026-09-03, un juge qui omettait de noter un alias (erreur de frappe,
+alias halluciné, réponse simplement oubliée) réduisait silencieusement la
+moyenne à 1 ou 2 juges au lieu de 3, sans aucun signal. `MergePipeline._rebuild_quality_df`
+vérifie désormais, pour chaque juge dont un fichier `scores_*.json` est chargé,
+qu'il a noté 100 % des (prompt_id, tentative, alias) attendus dont la réponse
+n'est pas vide — sinon la fusion échoue immédiatement (`ValueError`) en nommant
+le juge et les tuples manquants, avec l'instruction de relancer ce juge. C'est
+volontairement plus strict qu'un score individuel malformé (qui reste ignoré
+avec un avertissement) : une couverture partielle change silencieusement le
+sens du score moyen, une valeur isolée invalide ne fait que le priver d'une
+contribution.
+
+## 4. Couverture du périmètre
 
 Le module de correction déterministe résume lui-même sa limite :
 
@@ -120,11 +247,11 @@ Le module de correction déterministe résume lui-même sa limite :
 Cette limitation doit être explicitement communiquée à chaque utilisation du
 score qualité.
 
-## 4. Validation de la suite
+## 5. Validation de la suite
 
 La qualité de la suite doit être validée selon trois niveaux.
 
-### 4.1 Validation du contenu
+### 5.1 Validation du contenu
 
 Chaque prompt doit être revu par au moins une personne connaissant le projet et
 vérifier :
@@ -138,7 +265,7 @@ vérifier :
 Le document de revue initiale se trouve dans
 [quality-validation/review-v1.md](quality-validation/review-v1.md).
 
-### 4.2 Validation technique (déjà appliquée par le code)
+### 5.2 Validation technique (déjà appliquée par le code)
 
 Le schéma `QualityPrompt` et le pipeline garantissent, à l'entrée et à
 l'export :
@@ -156,7 +283,7 @@ l'export :
 Le détail de toutes les colonnes exportées est dans
 [workflow.md](workflow.md) (section *Métriques de qualité exportées*).
 
-### 4.3 Validation empirique (à la charge de l'opérateur du run)
+### 5.3 Validation empirique (à la charge de l'opérateur du run)
 
 - **Répétitions** : `QUALITY_REPETITIONS=1` par défaut, donc
   `quality_stability_score` reste `null` tant que cette variable n'est pas
@@ -167,7 +294,41 @@ Le détail de toutes les colonnes exportées est dans
 - comparer les classements obtenus sur plusieurs modèles ;
 - noter les prompts qui ne discriminent pas assez et les revoir en priorité.
 
-## 5. Comparaison avec gen-e2-eval
+#### Interprétation de `QUALITY_REPETITIONS`
+
+Pour un modèle et un prompt donnés, le taux de réussite observé est :
+
+$$
+r = \frac{\text{tentatives correctes}}{k}
+$$
+
+- $r=1$ : succès stable sur les tentatives observées ;
+- $r=0$ : échec reproductible sur les tentatives observées ;
+- $0<r<1$ : résultat instable.
+
+Le score agrégé moyenne d'abord les tentatives d'un même prompt, puis les
+prompts d'une dimension, puis les dimensions. Une répétition ne donne donc pas
+plus de poids au prompt dans la note finale. `quality_stability_score` résume la
+dispersion inter-tentatives et doit être lu avec les réponses détaillées.
+
+Pour `k=1`, une mauvaise réponse objective porte
+`verification_status=optional_openrouter_recheck`. Une commande manuelle peut
+envoyer deux rechecks supplémentaires au même modèle via OpenRouter. Pour
+`k>1`, le statut `run_repetitions_available` indique que les données du run
+suffisent déjà pour évaluer la reproductibilité ; la commande refuse alors de
+générer des appels et des coûts supplémentaires.
+
+Cette vérification ne recherche pas un responsable. Sans accès au payload reçu
+par l'upstream exact et sans comparaison directe avec ce même upstream, elle ne
+peut pas séparer un comportement du modèle, du fournisseur d'inférence ou du
+routage OpenRouter. Ses conclusions sont volontairement limitées à
+`confirmed_failure`, `not_reproduced`, `unstable` et `inconclusive`.
+
+Les rapports sous `results/verification/` sont des preuves secondaires : les
+dashboards les associent au benchmark, mais ils ne modifient ni la réponse ni
+la note du run historique.
+
+## 6. Comparaison avec gen-e2-eval
 
 Le score qualité de ce projet et la validation métier de `gen-e2-eval` ne sont
 pas directement comparables, car ils ne mesurent pas le même objet.
@@ -186,7 +347,7 @@ modèles pertinents**.
 Le template est dans
 [quality-validation/gen-e2-eval-comparison-template.md](quality-validation/gen-e2-eval-comparison-template.md).
 
-## 6. Critères d'acceptation
+## 7. Critères d'acceptation
 
 La suite est considérée comme correctement justifiée si elle remplit au moins
 les règles suivantes :
@@ -199,7 +360,7 @@ les règles suivantes :
   l'[ADR 0001](adr/0001-architecture-initiale.md)) ;
 - le run a été exécuté avec `QUALITY_REPETITIONS≥2` si son résultat sert de
   base à une décision d'exclusion ou de shortlist ;
-- la couverture et les limites du périmètre (§3) sont rappelées à côté du
+- la couverture et les limites du périmètre (§4) sont rappelées à côté du
   score dans tout livrable ;
 - le score est toujours interprété comme un signal de shortlist, jamais comme
   une recommandation finale d'adoption.

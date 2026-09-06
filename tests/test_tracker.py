@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from unittest.mock import patch
 
 import pandas as pd
 import pytest
 
+from src.observability.events import log_event
 from src.observability.tracker import ExperimentTracker, _safe_metric_key
 
 
@@ -80,6 +83,12 @@ class TestExperimentTracker:
             tracker.log_dataframe("results", df)
             mock_artifact.assert_called_once()
 
+    def test_log_run_metadata_logs_stringified_parameters(self, tracker: ExperimentTracker) -> None:
+        with patch("mlflow.log_params") as mock_params:
+            tracker.log_run_metadata({"run_id": "20260906_120000", "model_count": 2})
+
+        mock_params.assert_called_once_with({"run_id": "20260906_120000", "model_count": "2"})
+
 
 class TestSafeMetricKey:
     def test_replaces_slash_and_hyphen(self) -> None:
@@ -87,3 +96,20 @@ class TestSafeMetricKey:
 
     def test_no_special_chars_unchanged(self) -> None:
         assert _safe_metric_key("simplemodel") == "simplemodel"
+
+
+class TestStructuredEvents:
+    def test_event_is_json_and_contains_no_payload_content(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level("INFO"):
+            log_event(
+                logging.getLogger("test-events"),
+                phase="merge",
+                event="completed",
+                model_count=2,
+            )
+
+        record = next(record for record in caplog.records if "run_event=" in record.message)
+        payload = json.loads(record.message.removeprefix("run_event="))
+        assert payload["phase"] == "merge"
+        assert payload["event"] == "completed"
+        assert payload["model_count"] == 2

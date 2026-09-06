@@ -105,10 +105,13 @@ class TestMergeResults:
                 }
             ]
         )
+        valid_quality_rows = _quality_rows().loc[
+            lambda frame: ~((frame["model"] == "model-a") & (frame["prompt_id"] == 1))
+        ]
         result = _merge_results(
             ["model-a", "model-b"],
             _pricing(),
-            _quality_rows(),
+            valid_quality_rows,
             pd.DataFrame(),
             quality_prompt_count=2,
             quality_dimension_count=2,
@@ -117,8 +120,12 @@ class TestMergeResults:
 
         model_a = result.loc[result["model"] == "model-a"].iloc[0]
         model_b = result.loc[result["model"] == "model-b"].iloc[0]
+        assert model_a["avg_quality_score"] == pytest.approx(5.0)
+        assert model_a["quality_coverage_rate"] == pytest.approx(0.5)
         assert model_a["quality_collection_error_count"] == 1
         assert model_a["quality_collection_success_rate"] == pytest.approx(0.5)
+        assert not bool(model_a["quality_cer_eligible"])
+        assert model_a["cer"] == 0.0
         assert model_b["quality_collection_error_count"] == 0
         assert model_b["quality_collection_success_rate"] == pytest.approx(1.0)
 

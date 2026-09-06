@@ -21,9 +21,9 @@
     "strict_output": true
   },
   {
-    "prompt": "Write only a Python function `add(a: int, b: int) -> int` that returns the sum of its two arguments. Do not include markdown or an explanation.",
+    "prompt": "Write only a Python function `add(a: int, b: int) -> int` that returns the sum of its two arguments. Return the raw source code with no markdown code fences, no explanation and no other text.",
     "category": "code_generation",
-    "quality_dimension": "code_contract",
+    "quality_dimension": "code_correctness",
     "required_function": "add",
     "required_parameters": ["a", "b"],
     "strict_output": true

@@ -34,9 +34,11 @@ class TestSettingsValidation:
         )
         assert s.target_models_list == list(MODEL_PRESETS["paid_flagship"].models)
 
-    def test_default_target_models_are_free(self) -> None:
-        # _env_file=None isolates from the repo's real .env (which may list paid
-        # models) — this test targets the Settings field default, not .env content.
+    def test_default_target_models_are_free(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # _env_file=None isolates from the repo's real .env, but pydantic-settings
+        # still reads the process environment — this test targets the Settings
+        # field default, not whatever the operator has exported or configured.
+        monkeypatch.delenv("TARGET_MODELS", raising=False)
         s = Settings(openrouter_api_key="sk-test", _env_file=None)  # type: ignore[call-arg]
         assert all(":free" in m for m in s.target_models_list)
 

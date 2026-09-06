@@ -14,6 +14,17 @@ sécurité, afin de constituer une shortlist avant l'évaluation métier dans
 | **Sécurité** | 30 sondes [OWASP GenAI LLM Top 10 2026](https://genai.owasp.org/resource/owasp-genai-llm-top-10-2026/), score RSI 0-100 (pondération interne, non publiée par OWASP — cf. `_RSI_WEIGHTS` dans `security_scanner.py`), vérification ZDR | `rsi`, `leak_count`, `zero_data_retention` |
 | **Coût** | Tarif OpenRouter × profil de charge → TCO mensuel projeté + coût réel par appel (`response.usage.cost`) | `tco_usd`, `actual_cost_credits`, `cer` |
 
+## Voir les résultats
+
+| Besoin | Action |
+| --- | --- |
+| Consulter le dernier rapport partageable | Ouvrir `results/dashboard_<timestamp>.html` ; sa navigation mène aux pages Qualité, Preuves, Sécurité et Coûts. |
+| Explorer un résultat avec filtres | Lancer `make dashboard`, puis ouvrir `http://localhost:8501`. |
+| Générer le rapport HTML du dernier benchmark fusionné | Lancer `make export-html`. |
+
+Le [workflow du pipeline](workflow.md) indique les commandes dans l'ordre,
+depuis la vérification gratuite jusqu'au rapport final.
+
 ## Parcours recommandés
 
 - **Exécuter une évaluation** : suivre le [workflow du pipeline](workflow.md),

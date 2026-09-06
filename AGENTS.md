@@ -1,17 +1,80 @@
 # llm-model-screening — AI Agent Instructions
 
 > This file is read by GitHub Copilot, Claude Code, and other AI agents.
-> Replace `[PROJECT NAME]` and `[DESCRIPTION]` with your project details before using this template.
 
 ## Project Overview
 
-Doing researches on openrouter llm evaluation considering Security, Performance and cost.
+Research and decision-support tooling for screening OpenRouter LLMs across
+quality, security, performance, and cost. Results are pre-selection evidence,
+not final model recommendations; domain acceptance belongs in `gen-e2-eval`.
 
 ## Architecture & Conventions
 
-- Source code lives in `src/`
+- Core pipeline code lives in `src/`; Streamlit and shared presentation helpers
+  live in `dashboard/`; operational scripts live in `scripts/`
+- The production workflow is split into three phases:
+  `make collect` → `@judge-coordinator` → `make merge`
+- `make dry-run` is offline; `make verify` validates the OpenRouter key and
+  model catalog without chat-completion cost
+- `make export-html` builds a static dashboard; `make dashboard` launches the
+  interactive Streamlit view
 - Follow language-specific rules in `.github/instructions/` (Copilot) and `.claude/rules/` (Claude Code)
 - All AI artifacts are organised under `.github/` (Copilot) and `.claude/` (Claude Code)
+
+## Quality Evidence Rules
+
+- Preserve raw benchmark results. Post-run verification is sidecar evidence and
+  must never rewrite the original response or score
+- A wrong model response remains a quality failure. Only technical failures
+  such as timeouts, HTTP/provider errors, and invalid API responses count as
+  collection errors
+- Exception: when *every* model in a run misses the same reference-answer
+  prompt, the shared cause is the request that reached the provider, not the
+  models. The prompt is dropped from the aggregates and their denominator and
+  marked `suspected_input_corruption` — the raw response and score stay intact
+- Content correctness and output-format compliance are scored as separate
+  dimensions. Never let a formatting violation lower a content score
+- `avg_quality_score` blends a pass/fail scale with a graded one. Always
+  publish `avg_quality_score_deterministic` and `avg_quality_score_judged`
+  alongside it
+- A confirmed system-prompt disclosure caps the RSI below the robust band. Never
+  present a model as robust and vulnerable on the same view
+- Only score OWASP categories a single-turn chat probe can actually exercise;
+  report the others as not scored. RSI is comparable only across identical
+  `rsi_scored_categories`
+- The 3 Copilot judges are each affiliated with a provider that may also be a
+  benchmarked model; alias-based blindness is the only mitigation, and a
+  response's self-identification is scrubbed (best-effort) before it reaches a
+  judge. No further bias correction is applied after the fact — see
+  `docs/quality-methodology.md` "Fiabilité et biais du panel de juges"
+- `judge_disagreement` / `quality_judge_disagreement_rate` surface inter-judge
+  disagreement instead of silently averaging over it. Keep the mean rather
+  than a median: with exactly 3 judges a median just picks the middle one
+- A judge that does not score every expected (prompt_id, attempt, alias) fails
+  the merge immediately (`ValueError`) instead of silently reducing that
+  response's average to fewer judges
+- For `QUALITY_REPETITIONS > 1`, use the attempts already collected to assess
+  stability; do not add redundant rechecks
+- `make verify-quality ARGS="..."` is an optional, paid OpenRouter-only
+  reproducibility check for failed objective prompts from `k=1` runs
+- Reproducibility statuses (`confirmed_failure`, `not_reproduced`, `unstable`,
+  `inconclusive`) do not attribute causality to OpenRouter, an upstream
+  provider, or the model
+- Never expose unescaped model output in HTML. Pandas `Styler.to_html()` callers
+  must explicitly use HTML escaping
+- `actual_latency_p50_ms`/`actual_latency_p95_ms`/`actual_tokens_per_second`
+  are computed from latency captured *after* the concurrency semaphore is
+  acquired. Never report the legacy `actual_latency_ms` (a wall-clock sum
+  that includes queueing and retry back-off time) as a per-call latency figure
+
+## Result Artifacts
+
+- Summary benchmarks: `results/benchmark_<timestamp>.{csv,json}`
+- Quality transcripts and judge reasoning: `results/quality_details/`
+- Technical collection failures: `results/quality_diagnostics/`
+- Optional `k=1` rechecks: `results/verification/`
+- Per-call OpenRouter usage and costs: `results/call_costs/`
+- Static report: `results/dashboard_<timestamp>.html` plus its sibling page bundle
 
 ## AI Asset Policy
 
@@ -38,9 +101,39 @@ Doing researches on openrouter llm evaluation considering Security, Performance 
 - Keep code simple and testable
 - Prefer deterministic output contracts for AI-assisted features
 - Add tests for any behavior-changing change
+- Keep Streamlit-independent transformations in `dashboard/data_prep.py` so
+  live and static dashboards use the same logic
+- Use Python 3.11+ typing and vectorized pandas operations
+- Use Conventional Commits as defined in `.commitlintrc.json`
+
+## Validation
+
+Run the narrowest relevant tests first, then the applicable project checks:
+
+```bash
+make test
+make lint
+make type-check
+make docs-build
+```
+
+Documentation changes must pass `mkdocs build --strict`. Dashboard changes
+must be checked in Streamlit and, when applicable, in the static HTML export.
+
+## Documentation Maintenance
+
+- Update `CHANGELOG.md` under `[Unreleased]` for every user-visible feature,
+  behavioral change, bug fix, deprecation, or operational command
+- Review and update `AGENTS.md` whenever architecture, source ownership,
+  workflow commands, result artifacts, safety invariants, or validation
+  requirements change
+- Do not add routine implementation details or test-count churn to either file
+- Keep `README.md`, `docs/workflow.md`, and `docs/quality-methodology.md`
+  aligned with public commands and quality-scoring semantics
 
 ## Safety & Quality
 
 - Do not hardcode secrets — use environment variables
+- Keep `.env` local and `.env.example` limited to placeholder values
 - Fallback to safe defaults when uncertainty is high
-- Never expose raw model output to end users
+- Treat all model output as untrusted content and escape it before HTML rendering

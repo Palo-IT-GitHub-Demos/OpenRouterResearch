@@ -103,6 +103,16 @@ docs/
 
 ## Quick Start
 
+> **First benchmark, condensed.** The full walkthrough is below; this is the
+> command sequence once `.env` holds a valid `OPENROUTER_API_KEY`:
+>
+> ```bash
+> make dry-run && make verify        # both $0 — catch config/key/model mistakes first
+> make collect MODELS=free_general SECURITY=basic   # paid step (free models here: $0)
+> # then, in VS Code Copilot chat:  @judge-coordinator
+> make merge && make export-html     # writes results/dashboard_<timestamp>.html
+> ```
+
 ### 1. Prerequisites
 
 - Python 3.11+
@@ -166,6 +176,18 @@ paid `make collect`.
 
 ### 5. Run the benchmark
 
+> ⚠️ **`make collect` spends OpenRouter credits.** Every model call is billed
+> (`$0` for `:free` models, real cost otherwise). Steps 3 and 4 above are free
+> and catch the two most common mistakes — a bad key and a stale model slug —
+> before you spend anything.
+>
+> The benchmark is **3 phases**, and Phase 2 is a manual step in VS Code
+> Copilot chat, not a `make` target. Do all three before looking at results:
+>
+> 1. `make collect` — paid, calls OpenRouter
+> 2. `@judge-coordinator` in Copilot chat — $0, no OpenRouter call
+> 3. `make merge` — $0, fails with "Missing Copilot judge scores" if step 2 was skipped
+
 ```bash
 make collect
 # Phase 1 — collects responses, runs deterministic checks + security scans.
@@ -191,13 +213,35 @@ synthetic scores for a failed judge.
 make merge
 # Phase 3 — averages the 3 judges' scores per model, merges pricing + security,
 # exports results/benchmark_<timestamp>.{csv,json}. MLflow run recorded in ./mlruns/
+make export-html
+# Creates results/dashboard_<timestamp>.html and its linked page bundle.
+make inspect-run
+# Verifies the latest merge manifest and the checksums of its benchmark artifacts.
 ```
 
-### 6. Open the dashboard
+For an objective failure from a run with `QUALITY_REPETITIONS=1`, an optional
+paid OpenRouter-only recheck can measure whether the failure is reproducible:
 
 ```bash
-streamlit run dashboard/app.py
-# Opens http://localhost:8501
+make verify-quality ARGS='--results results/benchmark_<timestamp>.csv \
+  --model openai/gpt-4o-mini --prompt-id 4'
+```
+
+This sends the same prompt to the same OpenRouter model twice. It reports
+`confirmed_failure`, `not_reproduced`, `unstable`, or `inconclusive`; it does
+**not** identify whether OpenRouter, its upstream provider, or the model caused
+the result. The command rejects correct responses, subjective prompts, and
+runs where the selected prompt already has `k > 1` attempts.
+
+### 6. View the results
+
+Open `results/dashboard_<timestamp>.html` for a shareable report with linked
+Quality, Evidence, Security, and Cost pages. It works directly from disk, with
+no server required.
+
+```bash
+make dashboard
+# Opens the interactive dashboard at http://localhost:8501
 ```
 
 ---
@@ -212,10 +256,15 @@ All settings are loaded from environment variables (`.env`).
 | `OPENROUTER_BASE_URL`     | `https://openrouter.ai/api/v1` | API base URL                                                                                                                                                                       |
 | `TARGET_MODELS`           | 3 preset models                  | Comma-separated model list,**or** a named preset (`free_general` / `paid_flagship` / `mixed_value`, see `make models`)                                               |
 | `MAX_CONCURRENT_REQUESTS` | `3`                            | `asyncio.Semaphore` cap (conservative default for free-tier)                                                                                                                     |
+| `REQUEST_TIMEOUT`         | `60.0`                         | Per-request HTTP timeout, in seconds                                                                                                                                              |
+| `MAX_RETRIES`             | `3`                            | Retry attempts on HTTP 429/5xx, with exponential back-off                                                                                                                        |
 | `MLFLOW_TRACKING_URI`     | `sqlite:///mlruns.db`          | MLflow tracking database (SQLite)                                                                                                                                                  |
 | `SECURITY_MODE`           | `basic`                        | Named probe set:`basic` (5 built-in), `owasp` (30 probes, OWASP GenAI LLM Top 10 2026), `extended` (15 advanced probes). Also settable per run: `--security`/`SECURITY=` |
 | `SECURITY_PROBES_PATH`    | —                               | Path to a custom probe JSON file (overrides`SECURITY_MODE` above)                                                                                                                |
+| `MAX_SECURITY_PROBE_ERROR_RATE` | `0.15`                    | Abort a run when security-probe transport failures exceed this ratio                                                                                                             |
 | `QUALITY_REPETITIONS`     | `1`                            | Repeats per generic quality prompt; use`2`–`5` only for shortlist stability checks                                                                                            |
+| `MAX_QUALITY_COLLECTION_ERROR_RATE` | `0.15`                | Abort a run when quality-collection transport failures exceed this ratio                                                                                                         |
+| `WORKLOAD_PROFILE`        | `enterprise_qa`                | TCO/CER workload profile: `enterprise_qa` \| `code_assistant` \| `document_analysis` \| `chatbot_high_volume`                                                              |
 
 > **Note:** `JUDGE_MODEL` no longer exists. Quality judging for undecidable
 > responses is done by 3 GitHub Copilot agents (`@judge-anthropic`,
@@ -232,6 +281,18 @@ number of easy formatting prompts cannot dominate the result. Read it together w
 - `quality_dimension_coverage_rate` — fraction of quality dimensions represented in the score;
 - `quality_stability_score` — repeatability signal when `QUALITY_REPETITIONS >= 2`;
 - `quality_collection_error_count` — API/transport failures, kept separate from model failures.
+
+For objective checks, `verification_status` in the evidence detail distinguishes:
+
+- `not_required` — the response passed;
+- `optional_openrouter_recheck` — a failed objective response from a `k=1` run;
+- `run_repetitions_available` — use the attempts already collected with `k>1`;
+- `confirmed_failure`, `not_reproduced`, `unstable`, `inconclusive` — result of an optional
+  OpenRouter recheck associated with the benchmark.
+
+Recheck reports are sidecar evidence under `results/verification/`. They are shown in Streamlit
+and `evidence.html`, but never rewrite the original benchmark score. For shortlist decisions,
+prefer `QUALITY_REPETITIONS>=2`; the optional recheck mainly exists for diagnosing a `k=1` run.
 
 The cost-efficiency ratio (`cer`) is withheld when the result does not cover the required dimensions.
 Use `gen-e2-eval` after this filter to measure success against a client-specific golden dataset.
@@ -257,6 +318,8 @@ limits, the validation protocol and the comparison procedure with `gen-e2-eval`.
 | `Unknown model preset '...'`                                         | Typo in`MODELS=`/`TARGET_MODELS=<preset>`                                                                       | Run`make models` to list valid preset names                                                                                                               |
 | `make collect` warns about the free-tier request cap                 | `TARGET_MODELS` uses `:free` models and the account has < 10 USD lifetime credits                               | Buy ≥ 10 USD credits (raises the cap from 50 to 1000 req/day) or reduce`TARGET_MODELS` / `QUALITY_REPETITIONS`                                         |
 | `make merge` errors with "Missing Copilot judge scores"              | `@judge-coordinator` (Phase 2) was never run, or was run before the current `make collect`                      | Run`@judge-coordinator` in Copilot chat against the latest `data/intermediate/judging_*.json`, then retry `make merge`                                |
+| `make verify-quality` says the evidence is not eligible | The response passed, is not an objective check, or does not come from a `k=1` run | Inspect `verification_status` in Prompts & responses; use existing stability evidence for `k>1` |
+| `make verify-quality` cannot find accepted answers | The benchmark predates reproducibility metadata | Produce a new run; historical results remain readable but cannot be rechecked automatically |
 
 ---
 

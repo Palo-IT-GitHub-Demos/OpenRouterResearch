@@ -18,10 +18,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: |
-          pip install -e ".[dev]" 2>/dev/null \
-            || pip install -r requirements-dev.txt 2>/dev/null \
-            || echo "No Python deps to install"
+        run: pip install -e ".[dev]"
 
       - name: Lint (ruff)
         run: ruff check .
@@ -30,7 +27,7 @@ jobs:
         run: mypy src/
 
       - name: Test (pytest)
-        run: pytest --tb=short
+        run: pytest --cov=src --cov-report=term-missing --cov-fail-under=80 --tb=short
 
   typescript:
     name: TypeScript — lint & test
@@ -44,16 +41,16 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci || echo "No package-lock.json found, skipping"
+        run: npm ci
 
       - name: Lint
-        run: npm run lint || true
+        run: npm run lint
 
       - name: Type check
-        run: npm run type-check || true
+        run: npm run type-check
 
       - name: Test
-        run: npm test || true
+        run: npm test
 
   docs:
     name: Docs — strict mkdocs build

@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run",
+    "test": "sh -c 'if find src -type f | grep -Eq \"\\.(test|spec)\\.(ts|tsx|js|jsx|mjs|cjs)$\"; then vitest run; else echo \"No JS/TS test files to run\"; fi'",
     "lint": "sh -c 'if find src -type f | grep -Eq \"\\.(ts|tsx|js|mjs|cjs)$\"; then eslint src; else echo \"No JS/TS sources to lint\"; fi'",
     "type-check": "sh -c 'if find src -type f | grep -Eq \"\\.(ts|tsx)$\"; then tsc --noEmit; else echo \"No TypeScript sources to type-check\"; fi'",
     "format": "prettier --write src",

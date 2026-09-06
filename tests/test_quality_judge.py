@@ -9,10 +9,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.evaluators.quality_judge import (
+    FORMAT_COMPLIANCE_DIMENSION,
     AsyncQualityJudge,
     QualityJudge,
     _alias,
     _blind_alias_map,
+    _scrub_self_identification,
     _validate_evaluation_contract,
     load_quality_prompts,
     quality_suite_id,
@@ -22,6 +24,8 @@ from src.evaluators.quality_judge import (
 def _make_completion(content: str) -> MagicMock:
     """Build a mock ChatCompletion with the given message content."""
     completion = MagicMock()
+    completion.id = "gen-test"
+    completion.model = "resolved/model"
     completion.choices[0].message.content = content
     return completion
 
@@ -141,7 +145,7 @@ class TestPromptSchema:
         assert len(prompts) == 16
         assert {prompt.quality_dimension for prompt in prompts} == {
             "structured_output",
-            "code_contract",
+            "code_correctness",
             "factual_sanity",
             "elementary_reasoning",
             "instruction_reliability",
@@ -164,6 +168,56 @@ class TestPromptSchema:
         )
         with pytest.raises(ValueError, match="accepted_answers"):
             load_quality_prompts(path)
+
+    def test_rejects_prompt_with_messages(self, tmp_path: Path) -> None:
+        path = _write_prompt_fixture(
+            tmp_path,
+            [
+                {
+                    "prompt": "One turn.",
+                    "messages": [{"role": "user", "content": "Another turn."}],
+                    "category": "generic_judgment",
+                    "judge_criteria": ["Be useful."],
+                }
+            ],
+        )
+        with pytest.raises(ValueError, match="exactly one"):
+            load_quality_prompts(path)
+
+    async def test_collects_a_multiturn_scenario_in_one_api_call(
+        self,
+        async_judge: AsyncQualityJudge,
+        async_mock_client: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        path = _write_prompt_fixture(
+            tmp_path,
+            [
+                {
+                    "messages": [
+                        {"role": "user", "content": "Remember the word cobalt."},
+                        {"role": "assistant", "content": "I will remember cobalt."},
+                        {"role": "user", "content": "What word did I ask you to remember?"},
+                    ],
+                    "category": "generic_judgment",
+                    "judge_criteria": ["Reply with cobalt."],
+                }
+            ],
+        )
+        async_mock_client.chat_completion.return_value = _make_completion("cobalt")
+
+        result = await async_judge.run_collect(path, ["model-a"])
+
+        assert async_mock_client.chat_completion.await_count == 1
+        assert async_mock_client.chat_completion.call_args.kwargs["messages"] == [
+            {"role": "user", "content": "Remember the word cobalt."},
+            {"role": "assistant", "content": "I will remember cobalt."},
+            {"role": "user", "content": "What word did I ask you to remember?"},
+        ]
+        assert result.pending_judgments[0]["prompt"] == (
+            "user: Remember the word cobalt.\nassistant: I will remember cobalt.\n"
+            "user: What word did I ask you to remember?"
+        )
 
 
 class TestValidateEvaluationContract:
@@ -196,6 +250,34 @@ class TestValidateEvaluationContract:
             encoding="utf-8",
         )
         assert first_id != quality_suite_id(path)
+
+
+class TestScrubSelfIdentification:
+    @pytest.mark.parametrize(
+        ("text", "redacted_vendor"),
+        [
+            ("As an AI developed by Anthropic, I must decline.", "Anthropic"),
+            ("I'm Claude, made by Anthropic.", "Claude"),
+            ("As ChatGPT, I can help with that.", "ChatGPT"),
+            ("I am a large language model created by Google.", "Google"),
+            ("My name is Gemini and I was trained by Google.", "Gemini"),
+        ],
+    )
+    def test_redacts_self_identifying_vendor_names(self, text: str, redacted_vendor: str) -> None:
+        scrubbed = _scrub_self_identification(text)
+        assert redacted_vendor not in scrubbed
+        assert "[assistant]" in scrubbed
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "The capital of Australia is Canberra.",
+            "I am happy to help with your Python question.",
+            "Meta released Llama 3 recently.",
+        ],
+    )
+    def test_leaves_unrelated_content_untouched(self, text: str) -> None:
+        assert _scrub_self_identification(text) == text
 
 
 class TestAsyncCollect:
@@ -236,15 +318,56 @@ class TestAsyncCollect:
 
         result = await async_judge.run_collect(path, ["model-a", "model-b"], repetitions=2)
 
-        assert len(result.deterministic_rows) == 4
+        content_rows = [row for row in result.deterministic_rows if row["source"] == "deterministic"]
+        format_rows = [row for row in result.deterministic_rows if row["source"] == "deterministic-format"]
+        assert len(content_rows) == 4
+        # The strict-output prompt also yields one format-compliance row per response.
+        assert len(format_rows) == 4
+        assert {row["quality_dimension"] for row in format_rows} == {FORMAT_COMPLIANCE_DIMENSION}
         assert len(result.pending_judgments) == 2
         assert result.prompt_count == 2
-        assert result.dimension_count == 2
+        assert result.dimension_count == 3
         assert result.repetitions == 2
         assert result.collection_errors == []
         assert {pending["attempt"] for pending in result.pending_judgments} == {0, 1}
         assert all(len(pending["responses"]) == 2 for pending in result.pending_judgments)
         assert async_mock_client.chat_completion.await_count == 8
+        # Deterministic rows must retain the full prompt/response text, not just a preview,
+        # so a drill-down view can show exactly what was sent and returned.
+        assert content_rows[0]["prompt"] == "Return the required JSON."
+        assert content_rows[0]["response"] == '{"ok": true}'
+
+    async def test_judging_copy_is_scrubbed_but_evidence_copy_stays_raw(
+        self,
+        async_judge: AsyncQualityJudge,
+        async_mock_client: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        path = _write_prompt_fixture(
+            tmp_path,
+            [
+                {
+                    "prompt": "Write a concise support reply.",
+                    "category": "generic_judgment",
+                    "quality_dimension": "concise_communication",
+                    "judge_criteria": ["Be helpful."],
+                    "reference_answer": "Please contact support.",
+                }
+            ],
+        )
+        async_mock_client.chat_completion.return_value = _make_completion(
+            "As an AI developed by Anthropic, here is how to reset your password."
+        )
+
+        result = await async_judge.run_collect(path, ["model-a"])
+
+        pending = result.pending_judgments[0]
+        alias = next(iter(pending["alias_map"]))
+        # The raw text is what evidence/audit trails must show — never rewritten.
+        assert "Anthropic" in pending["responses"][alias]
+        # The judge-facing copy has the vendor name scrubbed.
+        assert "Anthropic" not in pending["responses_for_judging"][alias]
+        assert "[assistant]" in pending["responses_for_judging"][alias]
 
     async def test_collection_failure_is_not_scored_as_an_empty_response(
         self,
@@ -271,6 +394,38 @@ class TestAsyncCollect:
         assert len(result.collection_errors) == 1
         assert result.collection_errors[0]["error"] == "network unavailable"
 
+    async def test_redaction_placeholder_remains_scored_with_optional_k1_recheck(
+        self,
+        async_judge: AsyncQualityJudge,
+        async_mock_client: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        path = _write_prompt_fixture(
+            tmp_path,
+            [
+                {
+                    "prompt": "What is the capital of Australia? Reply with the city name only.",
+                    "category": "factual_sanity",
+                    "accepted_answers": ["Canberra"],
+                }
+            ],
+        )
+        async_mock_client.chat_completion.return_value = _make_completion(
+            'No actual address was provided; "[ADDRESS]" is a placeholder.'
+        )
+
+        result = await async_judge.run_collect(path, ["model-a"])
+
+        assert len(result.deterministic_rows) == 1
+        assert result.pending_judgments == []
+        assert result.collection_errors == []
+        row = result.deterministic_rows[0]
+        assert row["score"] == 1
+        assert row["verification_status"] == "optional_openrouter_recheck"
+        assert row["generation_id"] == "gen-test"
+        assert row["resolved_model"] == "resolved/model"
+        assert len(str(row["request_sha256"])) == 64
+
     async def test_empty_model_response_receives_a_quality_failure(
         self,
         async_judge: AsyncQualityJudge,
@@ -294,6 +449,44 @@ class TestAsyncCollect:
         assert result.collection_errors == []
         assert result.deterministic_rows[0]["score"] == 1
         assert result.deterministic_rows[0]["source"] == "deterministic-empty-response"
+
+    async def test_unknown_objective_failure_offers_k1_recheck_without_being_hidden(
+        self,
+        async_judge: AsyncQualityJudge,
+        async_mock_client: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        path = _write_prompt_fixture(
+            tmp_path,
+            [{"prompt": "What is 2 + 2?", "category": "exact_answer", "accepted_answers": ["4"]}],
+        )
+        async_mock_client.chat_completion.return_value = _make_completion("5")
+
+        result = await async_judge.run_collect(path, ["model-a"])
+
+        assert result.collection_errors == []
+        assert result.deterministic_rows[0]["score"] == 1
+        assert result.deterministic_rows[0]["verification_status"] == "optional_openrouter_recheck"
+        assert result.deterministic_rows[0]["expected_answers_json"] == '["4"]'
+
+    async def test_objective_failure_with_repetitions_uses_run_evidence(
+        self,
+        async_judge: AsyncQualityJudge,
+        async_mock_client: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        path = _write_prompt_fixture(
+            tmp_path,
+            [{"prompt": "What is 2 + 2?", "category": "exact_answer", "accepted_answers": ["4"]}],
+        )
+        async_mock_client.chat_completion.return_value = _make_completion("5")
+
+        result = await async_judge.run_collect(path, ["model-a"], repetitions=2)
+
+        assert len(result.deterministic_rows) == 2
+        assert {row["verification_status"] for row in result.deterministic_rows} == {
+            "run_repetitions_available"
+        }
 
     async def test_rejects_zero_repetitions(
         self,

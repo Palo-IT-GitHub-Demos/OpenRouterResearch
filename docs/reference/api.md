@@ -9,7 +9,7 @@ manuelle n'est nécessaire.
 script Streamlit avec des effets de bord au niveau module (rendu de page,
 lecture de fichiers), pas une bibliothèque importable sans risque au moment du
 build de la documentation. Son comportement est décrit en prose dans
-[le guide de workflow](../workflow.md#9-dashboard-streamlit).
+[le guide de workflow](../workflow.md#9-lire-les-resultats).
 
 ## Configuration
 

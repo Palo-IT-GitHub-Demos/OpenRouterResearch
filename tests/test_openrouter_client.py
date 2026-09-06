@@ -207,6 +207,42 @@ class TestAsyncChatCompletion:
         assert record.usage_context == "security_scan"
         assert record.actual_cost_credits == pytest.approx(0.0001)
 
+    async def test_network_latency_excludes_semaphore_queueing_time(self, settings: Settings) -> None:
+        import asyncio
+
+        # Force serialization so the second call must wait for the first to
+        # release the semaphore before its own network call can even start.
+        settings.max_concurrent_requests = 1
+        client = AsyncOpenRouterClient(settings)
+
+        async def _slow_create(**kwargs: object) -> MagicMock:
+            del kwargs
+            await asyncio.sleep(0.05)
+            completion = MagicMock()
+            completion.id = "gen-async"
+            completion.model = "openai/gpt-4o-mini"
+            completion.usage = SimpleNamespace(
+                prompt_tokens=1, completion_tokens=1, total_tokens=2, model_extra={"cost": 0.0}
+            )
+            return completion
+
+        try:
+            with patch.object(client._client.chat.completions, "create", new=AsyncMock(side_effect=_slow_create)):
+                await asyncio.gather(
+                    client.chat_completion(model="openai/gpt-4o-mini", messages=[{"role": "user", "content": "A"}]),
+                    client.chat_completion(model="openai/gpt-4o-mini", messages=[{"role": "user", "content": "B"}]),
+                )
+        finally:
+            await client.aclose()
+
+        # Whichever call went second queued behind the first for ~0.05s, so its
+        # wall-clock latency_ms is well above its own network_latency_ms — the
+        # opposite would mean queueing time is still leaking into the network figure.
+        # Bounds are generous (not a strict 2x ratio) to stay robust to scheduler jitter.
+        queued_record = max(client.call_costs, key=lambda r: r.latency_ms)
+        assert queued_record.latency_ms > 90  # queued (~50ms) + own network call (~50ms)
+        assert queued_record.network_latency_ms < 90  # its own network call only
+
 
 class TestAsyncGetKeyInfo:
     async def test_returns_key_metadata(self, settings: Settings) -> None:

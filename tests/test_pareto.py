@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from dashboard.pareto import compute_pareto_front
+from dashboard.pareto import build_pareto_scatter, compute_pareto_front
 
 
 class TestComputeParetoFront:
@@ -59,3 +59,30 @@ class TestComputeParetoFront:
         # The first one encountered (lower or equal quality at same cost) may be included
         # because the algorithm keeps the first point at each cost level.
         assert "Y" in pareto["model"].values
+
+
+class TestParetoChart:
+    def test_single_pareto_point_has_a_visible_marker_and_hover(self) -> None:
+        df = pd.DataFrame(
+            {
+                "model": ["provider/model-a"],
+                "cost_per_1m_tokens_usd": [1.0],
+                "avg_quality_score": [4.0],
+                "security_status": ["Safe"],
+                "zero_data_retention": [True],
+            }
+        )
+
+        figure = build_pareto_scatter(df, df)
+
+        frontier = next(trace for trace in figure.data if trace.name == "Pareto frontier")
+        assert frontier.mode == "lines+markers+text"
+        assert frontier.marker.size == 18
+        # The frontier overlay must not answer hover itself — it sits on top of
+        # the colored trace at the exact same coordinates, so leaving it
+        # interactive made the tooltip depend on cursor sub-pixel position.
+        assert frontier.hoverinfo == "skip"
+
+        colored_trace = next(trace for trace in figure.data if trace.name == "Safe")
+        assert "Pareto-optimal: %{customdata[2]}" in colored_trace.hovertemplate
+        assert colored_trace.customdata[0][2] == "Yes"

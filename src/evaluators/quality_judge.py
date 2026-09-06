@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import random
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +35,9 @@ from src.evaluators.deterministic_eval import CHECKS
 logger = logging.getLogger(__name__)
 
 QUALITY_SUITE_VERSION = "generic-screen-v1"
+
+FORMAT_COMPLIANCE_DIMENSION = "output_format_compliance"
+"""Dimension carrying strict-output adherence, kept apart from content correctness."""
 
 # ── Pydantic models for structured judge output ────────────────────────────────
 
@@ -61,6 +65,7 @@ class JudgeResult(BaseModel):
 
 
 _EXACT_ANSWER_CATEGORIES = {"exact_answer", "factual_sanity", "logical_reasoning"}
+_ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant"}
 
 
 def _validate_evaluation_contract(category: str, accepted_answers: list[str], judge_criteria: list[str]) -> None:
@@ -80,12 +85,29 @@ def _validate_evaluation_contract(category: str, accepted_answers: list[str], ju
         raise ValueError(f"Unmapped category '{category}' requires non-empty judge_criteria for blind evaluation.")
 
 
+class QualityMessage(BaseModel):
+    """One message in a provider-neutral quality scenario."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_role(self) -> QualityMessage:
+        """Restrict scenario roles to OpenRouter chat-completion roles."""
+        if self.role not in _ALLOWED_MESSAGE_ROLES:
+            raise ValueError(f"Unsupported message role '{self.role}'.")
+        return self
+
+
 class QualityPrompt(BaseModel):
     """Validated definition of one provider-neutral quality-screen prompt."""
 
     model_config = ConfigDict(extra="forbid")
 
-    prompt: str = Field(min_length=1)
+    prompt: str | None = Field(default=None, min_length=1)
+    messages: list[QualityMessage] | None = None
     category: str = Field(min_length=1)
     quality_dimension: str = Field(default="general", min_length=1)
     responses: dict[str, str] = Field(default_factory=dict)
@@ -100,9 +122,25 @@ class QualityPrompt(BaseModel):
 
     @model_validator(mode="after")
     def validate_evaluation_contract(self) -> QualityPrompt:
-        """Require objective references or explicit judge criteria per prompt."""
+        """Require exactly one input format and a valid evaluation contract."""
+        if (self.prompt is None) == (self.messages is None):
+            raise ValueError("Provide exactly one of 'prompt' or 'messages'.")
         _validate_evaluation_contract(self.category, self.accepted_answers, self.judge_criteria)
         return self
+
+    @property
+    def request_messages(self) -> list[dict[str, str]]:
+        """Return the complete conversation to send in one API call."""
+        if self.messages is not None:
+            return [message.model_dump() for message in self.messages]
+        return [{"role": "user", "content": self.prompt or ""}]
+
+    @property
+    def display_prompt(self) -> str:
+        """Return a durable transcript for deterministic evidence and judging."""
+        if self.messages is None:
+            return self.prompt or ""
+        return "\n".join(f"{message.role}: {message.content}" for message in self.messages)
 
     @property
     def evaluation_context(self) -> dict[str, object]:
@@ -124,6 +162,15 @@ class CollectedResponse:
     attempt: int
     content: str
     error: str | None = None
+    generation_id: str | None = None
+    resolved_model: str | None = None
+    request_sha256: str = ""
+
+
+def _request_sha256(messages: list[dict[str, str]]) -> str:
+    """Return a stable fingerprint of the exact local request messages."""
+    payload = json.dumps(messages, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -148,8 +195,67 @@ class CollectResult:
     #   "prompt_preview": str,
     #   "category": str | None,
     #   "alias_map": {"A": "model/id", ...},   ← aliases for position-bias mitigation
-    #   "responses": {"A": "text", ...}
+    #   "responses": {"A": "text", ...},       ← raw text, kept for evidence (never rewritten)
+    #   "responses_for_judging": {"A": "text", ...},  ← same text with self-identification
+    #                                                    scrubbed; this is what a judge sees
     # }]
+
+
+# ── Self-identification scrubbing (best effort) ────────────────────────────────────────
+#
+# Alias-based blind evaluation hides which model produced a response, but a
+# response that names its own vendor ("As an AI developed by Anthropic...")
+# defeats that blindness in front of a judge that happens to be from the same
+# vendor. This targets the literal self-referential phrasing observed in real
+# runs; it is NOT a guarantee of blindness — a paraphrased or indirect
+# disclosure is not caught. See docs/quality-methodology.md "Judge blindness
+# and self-preference bias".
+_VENDOR_MODEL_NAMES = (
+    "anthropic",
+    "claude",
+    "openai",
+    "chatgpt",
+    "gpt-4o",
+    "gpt-4",
+    "gpt-3.5",
+    "gpt-5",
+    "google",
+    "gemini",
+    "gemma",
+    "meta ai",
+    "llama",
+    "cohere",
+    "nvidia",
+    "nemotron",
+    "mistral",
+    "qwen",
+    "deepseek",
+    "grok",
+    "xai",
+)
+_SELF_REFERENCE_CUE = (
+    r"(?:i(?:'m|\s+am)"  # I'm / I am
+    r"|as(?:\s+an?)?"  # as / as a / as an
+    r"|my name is"
+    r"|i was (?:developed|created|built|trained|made)"
+    r"|(?:developed|created|built|trained|made)\s+by"  # "made by X" (an appositive, not just after "I'm")
+    r")"
+)
+_SELF_IDENTIFICATION_RE = re.compile(
+    rf"(?P<cue>\b{_SELF_REFERENCE_CUE}\b[^.!?\n]{{0,40}}?)\b(?P<vendor>"
+    + "|".join(re.escape(name) for name in _VENDOR_MODEL_NAMES)
+    + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _scrub_self_identification(text: str) -> str:
+    """Best-effort redaction of a self-disclosed vendor/model name for judges.
+
+    Only used for the judge-facing copy of a response; the raw text kept for
+    evidence is never modified by this function.
+    """
+    return _SELF_IDENTIFICATION_RE.sub(lambda m: f"{m.group('cue')}[assistant]", text)
 
 
 # ── Prompt templates ───────────────────────────────────────────────────────────
@@ -281,7 +387,7 @@ class QualityJudge:
 
         rows: list[dict[str, object]] = []
         for idx, entry in enumerate(dataset):
-            prompt = entry.prompt
+            prompt = entry.display_prompt
             responses = entry.responses
             if not responses:
                 continue
@@ -417,22 +523,28 @@ class AsyncQualityJudge:
         collection_errors: list[dict[str, object]] = []
 
         async def _process(idx: int, entry: QualityPrompt) -> None:
-            prompt = entry.prompt
+            prompt = entry.display_prompt
             logger.info("Collecting responses for prompt %d/%d …", idx + 1, len(dataset))
-            collected = await self._collect_responses(prompt, models, repetitions)
+            collected = await self._collect_responses(entry.request_messages, models, repetitions)
 
-            check = CHECKS.get(entry.category)
+            check = CHECKS.get(entry.category) if entry.messages is None else None
             undecidable_by_attempt: dict[int, dict[str, str]] = {}
 
             for item in collected:
                 row_metadata = {
                     "prompt_id": idx,
                     "attempt": item.attempt,
+                    "prompt": prompt,
                     "prompt_preview": prompt[:80],
                     "model": item.model,
+                    "response": item.content,
                     "category": entry.category,
                     "quality_dimension": entry.quality_dimension,
                     "weight": entry.weight,
+                    "generation_id": item.generation_id,
+                    "resolved_model": item.resolved_model,
+                    "request_sha256": item.request_sha256,
+                    "expected_answers_json": json.dumps(entry.accepted_answers, ensure_ascii=False),
                 }
                 if item.error is not None:
                     collection_errors.append({**row_metadata, "error": item.error})
@@ -451,6 +563,17 @@ class AsyncQualityJudge:
 
                 if check is not None:
                     check_result = check.run(prompt, item.content, entry.evaluation_context)
+                    if check_result.format_score is not None:
+                        deterministic_rows.append(
+                            {
+                                **row_metadata,
+                                "quality_dimension": FORMAT_COMPLIANCE_DIMENSION,
+                                "score": check_result.format_score,
+                                "reasoning": check_result.format_reason,
+                                "source": "deterministic-format",
+                                "verification_status": "not_required",
+                            }
+                        )
                     if check_result.score is not None:
                         deterministic_rows.append(
                             {
@@ -458,6 +581,17 @@ class AsyncQualityJudge:
                                 "score": check_result.score,
                                 "reasoning": check_result.reason,
                                 "source": "deterministic",
+                                "verification_status": (
+                                    "optional_openrouter_recheck"
+                                    if entry.category in _EXACT_ANSWER_CATEGORIES
+                                    and check_result.score < 5
+                                    and repetitions == 1
+                                    else (
+                                        "run_repetitions_available"
+                                        if entry.category in _EXACT_ANSWER_CATEGORIES and check_result.score < 5
+                                        else "not_required"
+                                    )
+                                ),
                             }
                         )
                         continue
@@ -481,7 +615,13 @@ class AsyncQualityJudge:
                         "judge_criteria": entry.judge_criteria,
                         "reference_answer": entry.reference_answer,
                         "alias_map": alias_map,
+                        # Raw text — kept for evidence, never rewritten (see AGENTS.md).
                         "responses": {alias: undecidable[mid] for alias, mid in alias_map.items()},
+                        # Same text, self-identification scrubbed — this is the copy the
+                        # blind judging file exposes to judge agents (see _save_pending).
+                        "responses_for_judging": {
+                            alias: _scrub_self_identification(undecidable[mid]) for alias, mid in alias_map.items()
+                        },
                     }
                 )
 
@@ -501,7 +641,10 @@ class AsyncQualityJudge:
                 key=lambda row: (int(str(row["prompt_id"])), int(str(row["attempt"]))),
             ),
             prompt_count=len(dataset),
-            dimension_count=len({entry.quality_dimension for entry in dataset}),
+            dimension_count=len(
+                {entry.quality_dimension for entry in dataset}
+                | ({FORMAT_COMPLIANCE_DIMENSION} if any(entry.strict_output for entry in dataset) else set())
+            ),
             repetitions=repetitions,
             quality_suite_id=quality_suite_id(prompts_path),
         )
@@ -510,29 +653,44 @@ class AsyncQualityJudge:
 
     async def _collect_responses(
         self,
-        prompt: str,
+        messages: list[dict[str, str]],
         models: list[str],
         repetitions: int,
     ) -> list[CollectedResponse]:
-        """Send each prompt attempt to all models concurrently.
+        """Send each complete conversation to all models concurrently.
 
         Failures are represented explicitly to keep transport availability out
         of the model-quality score.
         """
 
+        request_sha256 = _request_sha256(messages)
+
         async def _get(model: str, attempt: int) -> CollectedResponse:
             try:
                 completion = await self._client.chat_completion(
                     model=model,
-                    messages=[{"role": "user", "content": prompt}],
+                    messages=messages,
                     usage_context="quality_screen",
                     temperature=0,
                 )
                 content = completion.choices[0].message.content if completion.choices else None
-                return CollectedResponse(model=model, attempt=attempt, content=content or "")
+                return CollectedResponse(
+                    model=model,
+                    attempt=attempt,
+                    content=content or "",
+                    generation_id=completion.id,
+                    resolved_model=completion.model,
+                    request_sha256=request_sha256,
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to get response from '%s' (attempt %d): %s", model, attempt + 1, exc)
-                return CollectedResponse(model=model, attempt=attempt, content="", error=str(exc))
+                return CollectedResponse(
+                    model=model,
+                    attempt=attempt,
+                    content="",
+                    error=str(exc),
+                    request_sha256=request_sha256,
+                )
 
         tasks = [_get(model, attempt) for attempt in range(repetitions) for model in models]
         return list(await asyncio.gather(*tasks))

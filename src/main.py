@@ -29,6 +29,7 @@ from src.api.openrouter_client import (
 )
 from src.core.config import Settings, get_settings
 from src.core.model_presets import format_model_presets, resolve_models_arg
+from src.core.run_manifest import inspect_run_manifest, write_run_manifest
 from src.evaluators.cost_analyzer import (
     BUILTIN_WORKLOAD_PROFILES,
     AsyncCostAnalyzer,
@@ -37,13 +38,15 @@ from src.evaluators.cost_analyzer import (
     summarize_actual_call_costs,
 )
 from src.evaluators.quality_judge import (
+    FORMAT_COMPLIANCE_DIMENSION,
     AsyncQualityJudge,
     CollectResult,
     load_quality_prompts,
     quality_suite_id,
 )
-from src.evaluators.quality_metrics import summarize_quality_scores
+from src.evaluators.quality_metrics import build_quality_details, summarize_quality_dimensions, summarize_quality_scores
 from src.evaluators.security_scanner import AsyncSecurityScanner, SecurityScanner, probe_count
+from src.observability.events import log_event
 from src.observability.tracker import ExperimentTracker
 
 logging.basicConfig(
@@ -386,6 +389,14 @@ def _merge_results(
         )
         base = base.merge(quality_summary, on="model", how="left")
 
+        dimension_summary = summarize_quality_dimensions(quality_df)
+        if not dimension_summary.empty:
+            dimension_wide = dimension_summary.pivot(
+                index="model", columns="quality_dimension", values="dimension_score"
+            )
+            dimension_wide.columns = [f"quality_dim_{column}" for column in dimension_wide.columns]
+            base = base.merge(dimension_wide.reset_index(), on="model", how="left")
+
     if quality_collection_errors is not None and not quality_collection_errors.empty:
         error_summary = (
             quality_collection_errors.groupby("model", as_index=False)
@@ -419,7 +430,21 @@ def _merge_results(
         base = base.merge(summarize_actual_call_costs(actual_call_costs), on="model", how="left")
 
     if not security_df.empty:
-        _wanted = ["model", "leak_count", "is_vulnerable", "zero_data_retention", "rsi", "probe_details"]
+        _wanted = [
+            "model",
+            "leak_count",
+            "is_vulnerable",
+            "zero_data_retention",
+            "rsi",
+            "rsi_scored_category_count",
+            "rsi_scored_probe_count",
+            "rsi_scored_categories",
+            "rsi_leak_capped",
+            "probe_count",
+            "probe_error_count",
+            "probe_error_rate",
+            "probe_details",
+        ]
         sec_cols = [c for c in _wanted if c in security_df.columns]
         base = base.merge(security_df[sec_cols], on="model", how="left")
 
@@ -472,8 +497,13 @@ def _merge_results(
     return base
 
 
-def _export(df: pd.DataFrame, actual_call_costs: pd.DataFrame | None = None) -> None:
-    """Export summary results and, when available, the per-call cost ledger."""
+def _export(
+    df: pd.DataFrame,
+    actual_call_costs: pd.DataFrame | None = None,
+    quality_details: pd.DataFrame | None = None,
+    quality_diagnostics: pd.DataFrame | None = None,
+) -> Path:
+    """Export summary results and available audit artifacts."""
     _RESULTS_DIR.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime(_TIMESTAMP_FORMAT)
     stem = _RESULTS_DIR / f"benchmark_{timestamp}"
@@ -487,6 +517,21 @@ def _export(df: pd.DataFrame, actual_call_costs: pd.DataFrame | None = None) -> 
         actual_call_costs.to_csv(f"{call_costs_stem}.csv", index=False)
         actual_call_costs.to_json(f"{call_costs_stem}.json", orient="records", indent=2)
         logger.info("Actual call-cost ledger exported to '%s.{csv,json}'", call_costs_stem)
+    if quality_details is not None and not quality_details.empty:
+        details_dir = _RESULTS_DIR / "quality_details"
+        details_dir.mkdir(exist_ok=True)
+        details_stem = details_dir / f"benchmark_{timestamp}_quality_details"
+        quality_details.to_csv(f"{details_stem}.csv", index=False)
+        quality_details.to_json(f"{details_stem}.json", orient="records", indent=2)
+        logger.info("Quality prompt/response detail exported to '%s.{csv,json}'", details_stem)
+    if quality_diagnostics is not None and not quality_diagnostics.empty:
+        diagnostics_dir = _RESULTS_DIR / "quality_diagnostics"
+        diagnostics_dir.mkdir(exist_ok=True)
+        diagnostics_stem = diagnostics_dir / f"benchmark_{timestamp}_quality_diagnostics"
+        quality_diagnostics.to_csv(f"{diagnostics_stem}.csv", index=False)
+        quality_diagnostics.to_json(f"{diagnostics_stem}.json", orient="records", indent=2)
+        logger.info("Quality collection diagnostics exported to '%s.{csv,json}'", diagnostics_stem)
+    return stem
 
 
 def _quality_screen_metadata(prompts_path: Path) -> tuple[int | None, int | None, str | None]:
@@ -495,8 +540,10 @@ def _quality_screen_metadata(prompts_path: Path) -> tuple[int | None, int | None
         return None, None, None
     try:
         prompts = load_quality_prompts(prompts_path)
-        dimension_count = len({prompt.quality_dimension for prompt in prompts})
-        return len(prompts), dimension_count, quality_suite_id(prompts_path)
+        dimensions = {prompt.quality_dimension for prompt in prompts}
+        if any(prompt.strict_output for prompt in prompts):
+            dimensions.add(FORMAT_COMPLIANCE_DIMENSION)
+        return len(prompts), len(dimensions), quality_suite_id(prompts_path)
     except ValueError as exc:
         logger.warning("Could not read quality screen metadata: %s", exc)
         return None, None, None
@@ -603,7 +650,9 @@ def _save_pending(
                 "reference_answer": pj.get("reference_answer"),
                 "prompt_preview": pj.get("prompt_preview", ""),
                 "category": pj.get("category"),
-                "responses": pj["responses"],
+                # Self-identification-scrubbed copy — falls back to raw "responses"
+                # for pending files written before this field existed.
+                "responses": pj.get("responses_for_judging", pj["responses"]),
                 # alias_map intentionally omitted — blind evaluation
             }
             for pj in collect_result.pending_judgments
@@ -621,6 +670,38 @@ def _latest_file(directory: Path, pattern: str) -> Path | None:
     return files[0] if files else None
 
 
+def _validate_pending_payload(payload: dict[str, object]) -> None:
+    """Validate the minimum contract required by the merge phase."""
+    timestamp = payload.get("timestamp")
+    if not isinstance(timestamp, str) or not timestamp:
+        raise ValueError("Invalid pending artifact: 'timestamp' must be a non-empty string.")
+
+    models = payload.get("models")
+    if not isinstance(models, list) or not models or not all(isinstance(model, str) and model for model in models):
+        raise ValueError("Invalid pending artifact: 'models' must be a non-empty list of model IDs.")
+
+    for field in ("pricing", "security", "actual_call_costs", "deterministic_scores", "pending_judgments"):
+        value = payload.get(field, [])
+        if not isinstance(value, list):
+            raise ValueError(f"Invalid pending artifact: '{field}' must be a list.")
+
+    pending_judgments = payload.get("pending_judgments", [])
+    assert isinstance(pending_judgments, list)
+    for index, judgment in enumerate(pending_judgments):
+        if not isinstance(judgment, dict):
+            raise ValueError(f"Invalid pending artifact: pending judgment {index} must be an object.")
+        alias_map = judgment.get("alias_map")
+        responses = judgment.get("responses")
+        if not isinstance(alias_map, dict) or not alias_map:
+            raise ValueError(f"Invalid pending artifact: pending judgment {index} has no alias_map.")
+        if not all(isinstance(alias, str) and isinstance(model, str) for alias, model in alias_map.items()):
+            raise ValueError(f"Invalid pending artifact: pending judgment {index} has invalid aliases.")
+        if not isinstance(responses, dict) or set(responses) != set(alias_map):
+            raise ValueError(
+                f"Invalid pending artifact: pending judgment {index} responses do not match alias_map."
+            )
+
+
 # ── Phase 1: CollectPipeline ───────────────────────────────────────────────────
 
 
@@ -636,6 +717,7 @@ class CollectPipeline:
 
     async def run(self) -> Path:
         models = self._settings.target_models_list
+        log_event(logger, phase="collect", event="started", model_count=len(models))
         logger.info("Phase 1 — collecting from %d model(s): %s", len(models), models)
 
         prompt_count, _dimension_count, _suite_id = _quality_screen_metadata(_QUALITY_PROMPTS)
@@ -701,6 +783,16 @@ class CollectPipeline:
             n_pend,
             n_errs,
             len(actual_call_costs),
+        )
+        log_event(
+            logger,
+            phase="collect",
+            event="completed",
+            model_count=len(models),
+            deterministic_count=n_det,
+            pending_count=n_pend,
+            collection_error_count=n_errs,
+            cost_record_count=len(actual_call_costs),
         )
 
         # ── Fail-fast gate: collection error budget ────────────────────────────────────────
@@ -795,7 +887,11 @@ class MergePipeline:
             raise FileNotFoundError("No pending_*.json found in data/intermediate/. " "Run 'make collect' first.")
 
         logger.info("Phase 3 — loading intermediate data from '%s'", pending_path)
+        log_event(logger, phase="merge", event="started", artifact=str(pending_path))
         pending = json.loads(pending_path.read_text())
+        if not isinstance(pending, dict):
+            raise ValueError("Invalid pending artifact: top-level JSON value must be an object.")
+        _validate_pending_payload(pending)
 
         models: list[str] = pending["models"]
         pricing_df = pd.DataFrame(pending.get("pricing", []))
@@ -866,6 +962,15 @@ class MergePipeline:
 
         self._tracker.start_run(f"benchmark-{timestamp}")
         try:
+            self._tracker.log_run_metadata(
+                {
+                    "run_id": timestamp,
+                    "quality_suite_id": suite_id or "legacy",
+                    "quality_repetitions": repetitions,
+                    "workload_profile": self._settings.workload_profile,
+                    "model_count": len(models),
+                }
+            )
             self._log_results(result, quality_df, security_df)
             self._tracker.log_dataframe("benchmark_results", result)
             if not actual_call_costs.empty:
@@ -873,7 +978,23 @@ class MergePipeline:
         finally:
             self._tracker.end_run()
 
-        _export(result, actual_call_costs)
+        export_stem = _export(result, actual_call_costs, build_quality_details(quality_df), collection_errors)
+        score_files = sorted(_INTERMEDIATE_DIR.glob(f"scores_{timestamp}_*.json"))
+        manifest_path = _RESULTS_DIR / f"run_{timestamp}.manifest.json"
+        write_run_manifest(
+            output=manifest_path,
+            run_id=timestamp,
+            metadata={
+                "models": models,
+                "workload_profile": self._settings.workload_profile,
+                "quality_suite_id": suite_id,
+                "quality_repetitions": repetitions,
+            },
+            artifacts=[pending_path, *score_files, Path(f"{export_stem}.csv"), Path(f"{export_stem}.json")],
+            root=Path.cwd(),
+        )
+        logger.info("Run manifest exported to '%s'", manifest_path)
+        log_event(logger, phase="merge", event="completed", run_id=timestamp, model_count=len(models))
         return result
 
     @staticmethod
@@ -932,8 +1053,10 @@ class MergePipeline:
                 score_pool: dict[tuple[int, int, str], list[int]] = {}
                 reasoning_pool: dict[tuple[int, int, str], list[str]] = {}
                 source_pool: dict[tuple[int, int, str], list[str]] = {}
+                verdict_pool: dict[tuple[int, int, str], list[dict[str, object]]] = {}
                 pending_metadata: dict[tuple[int, int], dict[str, object]] = {
                     (int(str(pj["prompt_id"])), int(str(pj.get("attempt", 0)))): {
+                        "prompt": str(pj.get("prompt", "")),
                         "prompt_preview": str(pj.get("prompt_preview", "")),
                         "category": str(pj.get("category", "legacy")),
                         "quality_dimension": str(pj.get("quality_dimension", "legacy")),
@@ -945,10 +1068,26 @@ class MergePipeline:
                     (int(str(pj["prompt_id"])), int(str(pj.get("attempt", 0)))): cast(dict[str, str], pj["alias_map"])
                     for pj in pending_judgments
                 }
+                # Response text is stored keyed by alias (position-bias mitigation); invert
+                # each prompt's alias_map so it can be looked up by model_id like everything else.
+                responses_by_key: dict[tuple[int, int], dict[str, str]] = {
+                    (int(str(pj["prompt_id"])), int(str(pj.get("attempt", 0)))): {
+                        cast(dict[str, str], pj["alias_map"])[alias]: text
+                        for alias, text in cast(dict[str, str], pj.get("responses", {})).items()
+                        if alias in cast(dict[str, str], pj["alias_map"])
+                    }
+                    for pj in pending_judgments
+                }
+
+                # Per-judge coverage of (prompt_id, attempt, alias) — a judge silently
+                # dropping one model within an otherwise-covered prompt used to just
+                # reduce that response's average to fewer judges, with no visible signal.
+                judge_coverage: dict[str, set[tuple[int, int, str]]] = {}
 
                 for sf in scores_files:
                     scores_data = json.loads(sf.read_text())
                     judge_name: str = str(scores_data.get("judge", sf.stem))
+                    covered = judge_coverage.setdefault(judge_name, set())
                     for item in scores_data.get("scores", []):
                         pid = int(item["prompt_id"])
                         attempt = int(item.get("attempt", 0))
@@ -975,6 +1114,35 @@ class MergePipeline:
                             score_pool.setdefault(key, []).append(score)
                             reasoning_pool.setdefault(key, []).append(str(j.get("reasoning", "")))
                             source_pool.setdefault(key, []).append(judge_name)
+                            verdict_pool.setdefault(key, []).append(
+                                {
+                                    "judge_id": judge_name,
+                                    "score": score,
+                                    "reasoning": str(j.get("reasoning", "")),
+                                }
+                            )
+                            covered.add((pid, attempt, alias))
+
+                # Expected (prompt_id, attempt, alias) tuples: every alias with a
+                # non-empty response, per the same rule judges are instructed to
+                # follow ("one judgment per alias that has a non-empty response").
+                expected_alias_keys: set[tuple[int, int, str]] = {
+                    (int(str(pj["prompt_id"])), int(str(pj.get("attempt", 0))), alias)
+                    for pj in pending_judgments
+                    for alias, text in cast(dict[str, str], pj.get("responses", {})).items()
+                    if text.strip()
+                }
+                for judge_name, covered in judge_coverage.items():
+                    missing = sorted(expected_alias_keys - covered)
+                    if missing:
+                        raise ValueError(
+                            f"Judge '{judge_name}' scored {len(covered)}/{len(expected_alias_keys)} "
+                            "expected (prompt_id, attempt, alias) responses. Missing: "
+                            f"{missing[:10]}{' …' if len(missing) > 10 else ''}. "
+                            "Partial coverage silently reduces the judge average to fewer "
+                            "judges without any visible signal — re-run that judge agent "
+                            "(the coordinator re-sends the same batch) before merging."
+                        )
 
                 # Build averaged rows.
                 for (pid, attempt, model_id), scores in score_pool.items():
@@ -982,16 +1150,26 @@ class MergePipeline:
                     reasonings = reasoning_pool[(pid, attempt, model_id)]
                     sources = source_pool[(pid, attempt, model_id)]
                     metadata = pending_metadata.get((pid, attempt), {})
+                    response_text = responses_by_key.get((pid, attempt), {}).get(model_id, "")
                     rows.append(
                         {
                             "prompt_id": pid,
                             "attempt": attempt,
+                            "prompt": metadata.get("prompt", ""),
                             "prompt_preview": metadata.get("prompt_preview", ""),
                             "model": model_id,
+                            "response": response_text,
                             "score": avg,
+                            # Range across judges for this response — kept alongside the
+                            # mean rather than replacing it with a median: with only 3
+                            # judges a median is just "pick the middle one", not obviously
+                            # more correct, and it would silently redefine every historical
+                            # score. See docs/quality-methodology.md "Judge disagreement".
+                            "judge_disagreement": max(scores) - min(scores),
                             "reasoning": " | ".join(
                                 f"[{s}] {r[:120]}" for s, r in zip(sources, reasonings, strict=False)
                             ),
+                            "judge_verdicts": json.dumps(verdict_pool[(pid, attempt, model_id)], ensure_ascii=False),
                             "source": f"copilot-avg({len(scores)})",
                             "category": metadata.get("category", "legacy"),
                             "quality_dimension": metadata.get("quality_dimension", "legacy"),
@@ -1044,13 +1222,13 @@ def _run_preflight_checks(settings: Settings) -> None:
 
     models = settings.target_models_list
     if not models:
-        problems.append("TARGET_MODELS est vide — aucun modèle à évaluer.")
+        problems.append("TARGET_MODELS is empty — no model to evaluate.")
     duplicates = sorted({m for m in models if models.count(m) > 1})
     if duplicates:
-        problems.append(f"Modèles en double dans TARGET_MODELS : {duplicates}")
+        problems.append(f"Duplicate models in TARGET_MODELS: {duplicates}")
 
     if not _QUALITY_PROMPTS.exists():
-        problems.append(f"Fichier de prompts introuvable : '{_QUALITY_PROMPTS}'.")
+        problems.append(f"Prompt file not found: '{_QUALITY_PROMPTS}'.")
     else:
         try:
             load_quality_prompts(_QUALITY_PROMPTS)
@@ -1065,28 +1243,26 @@ def _run_preflight_checks(settings: Settings) -> None:
 
     if probes_path is not None:
         if not probes_path.exists():
-            problems.append(f"Fichier de sondes de sécurité introuvable : " f"'{probes_path}'.")
+            problems.append(f"Security probe file not found: '{probes_path}'.")
         else:
             try:
                 probes = json.loads(probes_path.read_text())
                 if not isinstance(probes, list) or not probes:
-                    problems.append(f"'{probes_path}' doit contenir une liste JSON non vide.")
+                    problems.append(f"'{probes_path}' must contain a non-empty JSON list.")
                 else:
                     for i, probe in enumerate(probes):
                         if not isinstance(probe, dict) or not probe.get("message"):
                             problems.append(
-                                f"Probe #{i} de '{probes_path}' invalide " "— clé 'message' manquante ou vide."
+                                f"Probe #{i} of '{probes_path}' is invalid — 'message' key missing or empty."
                             )
             except json.JSONDecodeError as exc:
-                problems.append(f"'{probes_path}' contient du JSON invalide : {exc}")
+                problems.append(f"'{probes_path}' contains invalid JSON: {exc}")
 
     if problems:
         formatted = "\n  - ".join(problems)
-        raise ValueError(
-            "[DRY-RUN] Configuration invalide — corrige avant de lancer un run " f"réel :\n  - {formatted}"
-        )
+        raise ValueError(f"[DRY-RUN] Invalid configuration — fix this before starting a real run:\n  - {formatted}")
 
-    logger.info("[DRY-RUN] Pré-vérifications OK — config, prompts et probes valides.")
+    logger.info("[DRY-RUN] Pre-flight checks OK — config, prompts and probes are valid.")
 
 
 def _write_fake_scores(pending_judgments: list[dict[str, object]], timestamp: str, path: Path) -> None:
@@ -1142,24 +1318,24 @@ def _report_dry_run_summary(
     )
 
     logger.info("=" * 70)
-    logger.info("[DRY-RUN] ✅ Pipeline validé de bout en bout — AUCUN coût API réel.")
-    logger.info("[DRY-RUN]   Modèles testés         : %d", len(models))
-    logger.info("[DRY-RUN]   Scores déterministes   : %d", n_det)
+    logger.info("[DRY-RUN] ✅ Pipeline validated end to end — NO real API cost.")
+    logger.info("[DRY-RUN]   Models tested          : %d", len(models))
+    logger.info("[DRY-RUN]   Deterministic scores   : %d", n_det)
     logger.info(
-        "[DRY-RUN]   Jugements simulés      : %d (scores factices — pas un " "vrai jugement qualité)",
+        "[DRY-RUN]   Simulated judgements   : %d (synthetic scores — not a real quality judgement)",
         n_pend,
     )
-    logger.info("[DRY-RUN]   Erreurs de collecte   : %d", n_errors)
-    logger.info("[DRY-RUN]   Scans sécurité         : %d modèle(s)", len(security_df))
-    logger.info("[DRY-RUN]   Lignes pricing (fake)  : %d", len(pricing_df))
+    logger.info("[DRY-RUN]   Collection errors      : %d", n_errors)
+    logger.info("[DRY-RUN]   Security scans         : %d model(s)", len(security_df))
+    logger.info("[DRY-RUN]   Pricing rows (fake)    : %d", len(pricing_df))
     if n_missing_pricing:
         logger.warning(
-            "[DRY-RUN]   ⚠ %d modèle(s) sans pricing — vérifie TARGET_MODELS.",
+            "[DRY-RUN]   ⚠ %d model(s) without pricing — check TARGET_MODELS.",
             n_missing_pricing,
         )
     logger.info("=" * 70)
-    logger.info("[DRY-RUN] Si tout est vert ci-dessus, tu peux lancer en confiance :")
-    logger.info("[DRY-RUN]   make collect   (Phase 1 réelle — appelle OpenRouter)")
+    logger.info("[DRY-RUN] If everything above is green, you can run for real:")
+    logger.info("[DRY-RUN]   make collect   (Phase 1, real — calls OpenRouter)")
 
 
 class DryRunPipeline(CollectPipeline):
@@ -1183,7 +1359,7 @@ class DryRunPipeline(CollectPipeline):
         _run_preflight_checks(settings)
 
         logger.info(
-            "[DRY-RUN] Simulation offline pour %d modèle(s) — aucun appel API, " "aucun agent juge : %s",
+            "[DRY-RUN] Offline simulation for %d model(s) — no API call, no judge agent: %s",
             len(models),
             models,
         )
@@ -1196,6 +1372,16 @@ class DryRunPipeline(CollectPipeline):
                 self._run_quality_collect(cast(AsyncOpenRouterClient, client), models),
             )
             actual_call_costs = call_costs_to_dataframe(client.call_costs)
+
+        # The dry run is the guard rail before a paid run, so it must fail on the
+        # same error budget — otherwise a fully broken quality axis exits 0.
+        _enforce_collect_error_budget(
+            collect_result,
+            security_df,
+            model_count=len(models),
+            max_quality_collection_error_rate=settings.max_quality_collection_error_rate,
+            max_security_probe_error_rate=settings.max_security_probe_error_rate,
+        )
 
         timestamp = datetime.now().strftime(_TIMESTAMP_FORMAT)
 
@@ -1242,7 +1428,12 @@ class DryRunPipeline(CollectPipeline):
         call_costs_stem = _DRY_RUN_DIR / f"call_costs_{timestamp}"
         actual_call_costs.to_csv(f"{call_costs_stem}.csv", index=False)
         actual_call_costs.to_json(f"{call_costs_stem}.json", orient="records", indent=2)
-        logger.info("[DRY-RUN] Aperçu du résultat fusionné → '%s.{csv,json}'", preview_stem)
+        quality_details = build_quality_details(quality_df)
+        if not quality_details.empty:
+            quality_details_stem = _DRY_RUN_DIR / f"quality_details_{timestamp}"
+            quality_details.to_csv(f"{quality_details_stem}.csv", index=False)
+            quality_details.to_json(f"{quality_details_stem}.json", orient="records", indent=2)
+        logger.info("[DRY-RUN] Merged result preview → '%s.{csv,json}'", preview_stem)
 
         _report_dry_run_summary(result, collect_result, security_df, pricing_df, models)
         return result
@@ -1418,6 +1609,14 @@ def main() -> None:
         elif subcommand == "verify":
             verify_pipeline = VerifyPipeline(settings) if settings else VerifyPipeline()
             asyncio.run(verify_pipeline.run())
+        elif subcommand == "inspect-run":
+            manifest = _latest_file(_RESULTS_DIR, "run_*.manifest.json")
+            if manifest is None:
+                raise FileNotFoundError("No run manifest found in results/. Run 'make merge' first.")
+            errors = inspect_run_manifest(manifest, Path.cwd())
+            if errors:
+                raise ValueError("Run manifest validation failed:\n  - " + "\n  - ".join(errors))
+            logger.info("Run manifest is valid: %s", manifest)
         else:
             logger.error(
                 "Unknown subcommand '%s'. Usage: python -m src.main "

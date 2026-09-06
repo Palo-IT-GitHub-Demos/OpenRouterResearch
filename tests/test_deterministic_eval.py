@@ -51,15 +51,31 @@ class TestJsonValidityCheck:
         assert result.passed is False
         assert result.score == 1
 
-    def test_strict_json_rejects_markdown_fences(self) -> None:
+    def test_strict_json_reports_markdown_fences_as_format_failure(self) -> None:
         check = JsonValidityCheck()
         result = check.run(
             "",
             '```json\n{"status": "ok"}\n```',
             {"expected_json": {"status": "ok"}, "strict_output": True},
         )
-        assert result.passed is False
-        assert result.score == 1
+        assert result.passed is True
+        assert result.score == 5
+        assert result.format_score == 1
+
+    def test_strict_json_without_fences_is_format_compliant(self) -> None:
+        check = JsonValidityCheck()
+        result = check.run(
+            "",
+            '{"status": "ok"}',
+            {"expected_json": {"status": "ok"}, "strict_output": True},
+        )
+        assert result.score == 5
+        assert result.format_score == 5
+
+    def test_non_strict_json_has_no_format_score(self) -> None:
+        check = JsonValidityCheck()
+        result = check.run("", '```json\n{"status": "ok"}\n```', {"expected_json": {"status": "ok"}})
+        assert result.format_score is None
 
 
 class TestPythonSyntaxCheck:
