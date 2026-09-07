@@ -124,8 +124,7 @@ def flag_suspected_input_corruption(
         model_count=("model", "nunique"), failed_count=("failed", "sum")
     )
     corrupted = per_prompt_df.index[
-        (per_prompt_df["model_count"] >= min_models)
-        & (per_prompt_df["failed_count"] == per_prompt_df["model_count"])
+        (per_prompt_df["model_count"] >= min_models) & (per_prompt_df["failed_count"] == per_prompt_df["model_count"])
     ]
     if corrupted.empty:
         return no_flag
@@ -220,11 +219,7 @@ def summarize_quality_dimensions(quality_df: pd.DataFrame) -> pd.DataFrame:
         quality_prompt_count=("prompt_id", "nunique")
     )
     result_df = dimension_df.merge(prompt_counts_df, on=["model", "quality_dimension"], how="left")
-    return (
-        result_df[_DIMENSION_COLUMNS]
-        .sort_values(["model", "quality_dimension"])
-        .reset_index(drop=True)
-    )
+    return result_df[_DIMENSION_COLUMNS].sort_values(["model", "quality_dimension"]).reset_index(drop=True)
 
 
 def build_quality_details(quality_df: pd.DataFrame) -> pd.DataFrame:
@@ -267,11 +262,7 @@ def build_quality_details(quality_df: pd.DataFrame) -> pd.DataFrame:
     if bool(corrupted.any()):
         flagged_prompts = details_df.loc[corrupted, "prompt_id"]
         details_df.loc[details_df["prompt_id"].isin(flagged_prompts), "verification_status"] = INPUT_CORRUPTION_STATUS
-    return (
-        details_df[_DETAIL_COLUMNS]
-        .sort_values(["model", "prompt_id", "attempt"])
-        .reset_index(drop=True)
-    )
+    return details_df[_DETAIL_COLUMNS].sort_values(["model", "prompt_id", "attempt"]).reset_index(drop=True)
 
 
 def summarize_quality_scores(

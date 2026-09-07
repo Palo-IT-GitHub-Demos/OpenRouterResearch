@@ -484,9 +484,7 @@ class TestAsyncCollect:
         result = await async_judge.run_collect(path, ["model-a"], repetitions=2)
 
         assert len(result.deterministic_rows) == 2
-        assert {row["verification_status"] for row in result.deterministic_rows} == {
-            "run_repetitions_available"
-        }
+        assert {row["verification_status"] for row in result.deterministic_rows} == {"run_repetitions_available"}
 
     async def test_rejects_zero_repetitions(
         self,

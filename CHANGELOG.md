@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `collect`/`merge` CLI output now states which phase is running (`Phase 1/3`,
+  `Phase 3/3`), ends with a bordered `✅ Done` summary, and prints an explicit
+  next command (`@judge-coordinator` + `make merge`, `make dashboard`, or
+  `make export-html`); the unknown-subcommand error now lists every
+  subcommand with a one-line description instead of a bare usage string
 - Clarified that the security probe datasets are internally authored: `owasp`
   is aligned with OWASP categories, while `extended` adds advanced LLM01
   red-team probes; neither is an official OWASP test suite or certification
@@ -16,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Interactive `make select` now asks for each catalog filter, supports `skip`,
   offers numbered model choices with `0` for the recommendation, and saves the
   chosen IDs as reusable `MODELS=selection` runtime state
+- `make select` now explains that pressing Enter keeps a filter default, shows
+  recommended models separately from up to 20 additional matching models, and
+  allows selecting either group by number
 - The `free_general` preset now contains two free models instead of three, so
   its default basic run stays within the indicative 50-request free-tier quota
 - `make select` now classifies zero-priced catalog routes, including

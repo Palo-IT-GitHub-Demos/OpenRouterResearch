@@ -184,8 +184,7 @@ class _CallCostLedger:
             requested_model=requested_model,
             usage_context=usage_context,
             latency_ms=(now - started_at) * 1_000,
-            network_latency_ms=(now - (network_started_at if network_started_at is not None else started_at))
-            * 1_000,
+            network_latency_ms=(now - (network_started_at if network_started_at is not None else started_at)) * 1_000,
         )
         with self._call_costs_lock:
             self._call_costs.append(record)

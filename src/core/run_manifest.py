@@ -17,9 +17,7 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def build_run_manifest(
-    *, run_id: str, metadata: dict[str, Any], artifacts: list[Path], root: Path
-) -> dict[str, Any]:
+def build_run_manifest(*, run_id: str, metadata: dict[str, Any], artifacts: list[Path], root: Path) -> dict[str, Any]:
     """Build a manifest containing metadata and checksums for existing files."""
     entries: list[dict[str, Any]] = []
     for artifact in artifacts:

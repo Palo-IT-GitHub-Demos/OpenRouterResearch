@@ -724,7 +724,11 @@ class CollectPipeline:
     async def run(self) -> Path:
         models = self._settings.target_models_list
         log_event(logger, phase="collect", event="started", model_count=len(models))
-        logger.info("Phase 1 — collecting from %d model(s): %s", len(models), models)
+        logger.info(
+            "[COLLECT] Phase 1/3 — calling OpenRouter for %d model(s), no judge scoring yet: %s",
+            len(models),
+            models,
+        )
 
         prompt_count, _dimension_count, _suite_id = _quality_screen_metadata(_QUALITY_PROMPTS)
         probes_path = _resolve_security_probes_path(self._settings)
@@ -784,7 +788,9 @@ class CollectPipeline:
         n_pend = len(collect_result.pending_judgments)
         n_errs = len(collect_result.collection_errors)
         logger.info(
-            "Deterministic scores: %d  |  Pending judgments: %d  |  Collection errors: %d  |  Cost records: %d",
+            "[COLLECT] Saved to '%s' — deterministic scores: %d | pending judgments: %d | "
+            "collection errors: %d | cost records: %d",
+            pending_path,
             n_det,
             n_pend,
             n_errs,
@@ -808,16 +814,21 @@ class CollectPipeline:
             max_allowed = self._settings.max_quality_collection_error_rate
             if error_rate > max_allowed:
                 raise ValueError(
-                    f"[quality] ABORT: error rate {error_rate:.1%} exceeds threshold {max_allowed:.1%} "
-                    f"({n_errs} errors in {total_quality_attempts} attempts). "
-                    f"Run is too degraded for reliable evaluation."
+                    f"[COLLECT] ABORT — quality collection error rate {error_rate:.1%} exceeds the "
+                    f"{max_allowed:.1%} budget ({n_errs} errors in {total_quality_attempts} attempts). "
+                    "Run is too degraded for reliable evaluation. Check the [quality]/[security] error "
+                    "logs above for the failing provider/model, fix it, then re-run 'make collect'."
                 )
-            logger.info(f"[quality] Error rate {error_rate:.1%} within budget (max {max_allowed:.1%})")
+            logger.info(f"[COLLECT] Quality error rate {error_rate:.1%} within the {max_allowed:.1%} budget.")
 
+        logger.info("=" * 70)
         if n_pend > 0:
-            logger.info("Next: run judge-benchmark prompt in Copilot, then: make merge")
+            logger.info("[COLLECT] ✅ Done — %d response(s) need blind LLM judging before scoring.", n_pend)
+            logger.info("[COLLECT] Next: ask Copilot '@judge-coordinator', then run: make merge")
         else:
-            logger.info("All scores are deterministic — run: make merge")
+            logger.info("[COLLECT] ✅ Done — every response was scored deterministically, no judge needed.")
+            logger.info("[COLLECT] Next: make merge")
+        logger.info("=" * 70)
 
         return pending_path
 
@@ -892,7 +903,7 @@ class MergePipeline:
         if pending_path is None:
             raise FileNotFoundError("No pending_*.json found in data/intermediate/. " "Run 'make collect' first.")
 
-        logger.info("Phase 3 — loading intermediate data from '%s'", pending_path)
+        logger.info("[MERGE] Phase 3/3 — combining '%s' with judge scores and pricing/security data …", pending_path)
         log_event(logger, phase="merge", event="started", artifact=str(pending_path))
         pending = json.loads(pending_path.read_text())
         if not isinstance(pending, dict):
@@ -999,7 +1010,11 @@ class MergePipeline:
             artifacts=[pending_path, *score_files, Path(f"{export_stem}.csv"), Path(f"{export_stem}.json")],
             root=Path.cwd(),
         )
-        logger.info("Run manifest exported to '%s'", manifest_path)
+        logger.info("=" * 70)
+        logger.info("[MERGE] ✅ Done — %d model(s) merged into '%s.{csv,json}'.", len(models), export_stem)
+        logger.info("[MERGE]   Run manifest: '%s'", manifest_path)
+        logger.info("[MERGE] Next: make dashboard   (interactive)   or   make export-html   (static report)")
+        logger.info("=" * 70)
         log_event(logger, phase="merge", event="completed", run_id=timestamp, model_count=len(models))
         return result
 
@@ -1611,7 +1626,7 @@ async def _select_models_command(args: argparse.Namespace) -> None:
     min_context = args.min_context
     limit = args.limit
     if sys.stdin.isatty():
-        kind = input("Model type [1=paid, 2=free, 3=all, skip=all]: ").strip().lower()
+        kind = input("Model type [1=paid, 2=free, 3=all, Enter=skip]: ").strip().lower()
         if kind == "1":
             paid_only, free_only = True, False
         elif kind == "2":
@@ -1620,7 +1635,7 @@ async def _select_models_command(args: argparse.Namespace) -> None:
             raise ValueError("Invalid model type. Choose 1, 2, 3, or skip.")
 
         def ask_number(label: str, default: float | int | None) -> float | int | None:
-            answer = input(f"{label} [{default if default is not None else 'skip'}]: ").strip().lower()
+            answer = input(f"{label} [{default if default is not None else 'Enter=skip'}]: ").strip().lower()
             if answer in {"", "skip", "s"}:
                 return default
             try:
@@ -1636,20 +1651,23 @@ async def _select_models_command(args: argparse.Namespace) -> None:
             raise ValueError("Maximum number of models must be a whole number.")
         limit = limit_value
 
-    entries = select_models(
+    matching_entries = select_models(
         catalog,
         paid_only=paid_only,
         free_only=free_only,
         max_input_price_per_million=max_input_price,
         max_output_price_per_million=max_output_price,
         min_context_length=min_context,
-        limit=limit,
+        limit=max(limit, len(catalog)),
     )
-    if not entries:
+    if not matching_entries:
         raise ValueError("No models match the selection filters.")
 
-    print("Available models:")
-    for index, entry in enumerate(entries, start=1):
+    recommended_entries = matching_entries[:limit]
+    other_entries = matching_entries[limit : limit + 20]
+    displayed_entries = recommended_entries + other_entries
+    print("Recommended models (the preselection):")
+    for index, entry in enumerate(recommended_entries, start=1):
         kind = "free" if entry.is_free else "paid"
         print(
             f"  {index}. {entry.model_id} | {kind} | "
@@ -1657,26 +1675,38 @@ async def _select_models_command(args: argparse.Namespace) -> None:
             f"${entry.output_price_per_token * 1_000_000:.4f} output per 1M tokens | "
             f"context {entry.context_length:,}"
         )
+    if other_entries:
+        print("Other models matching your filters:")
+        for index, entry in enumerate(other_entries, start=limit + 1):
+            kind = "free" if entry.is_free else "paid"
+            print(
+                f"  {index}. {entry.model_id} | {kind} | "
+                f"${entry.input_price_per_token * 1_000_000:.4f} input / "
+                f"${entry.output_price_per_token * 1_000_000:.4f} output per 1M tokens | "
+                f"context {entry.context_length:,}"
+            )
     if sys.stdin.isatty():
         print(
-            "\nSelection: 0 = use the recommendation, numbers = choose models "
-            "(for example 1,3), skip = use recommendation"
+            "\nSelection: 0 = use all recommended models, numbers = choose models "
+            "(for example 2,7), Enter/skip = use the recommendation"
         )
         selection = input("Your choice [0]: ").strip().lower()
         if selection in {"", "0", "skip", "s"}:
-            entries = entries[:1]
+            entries = recommended_entries
         else:
             try:
                 indexes = [int(value.strip()) for value in selection.split(",")]
                 if (
                     not indexes
                     or len(set(indexes)) != len(indexes)
-                    or any(index < 1 or index > len(entries) for index in indexes)
+                    or any(index < 1 or index > len(displayed_entries) for index in indexes)
                 ):
                     raise ValueError
-                entries = [entries[index - 1] for index in indexes]
+                entries = [displayed_entries[index - 1] for index in indexes]
             except ValueError as exc:
                 raise ValueError("Invalid selection. Use 0, skip, or comma-separated model numbers.") from exc
+    else:
+        entries = recommended_entries
 
     models = [entry.model_id for entry in entries]
     prompt_count, _dimension_count, _suite_id = _quality_screen_metadata(_QUALITY_PROMPTS)
@@ -1724,14 +1754,15 @@ def main() -> None:
 
         if subcommand in ("run", "collect"):
             pipeline = CollectPipeline(settings) if settings else CollectPipeline()
-            pending = asyncio.run(pipeline.run())
-            logger.info("Pending file: %s", pending)
+            asyncio.run(pipeline.run())
         elif subcommand == "merge":
             result = MergePipeline().run()
+            print("\nMerged benchmark results:")
             print(result.to_string(index=False))
         elif subcommand in ("dry-run", "dryrun"):
             dry_run_pipeline = DryRunPipeline(settings) if settings else DryRunPipeline()
             result = asyncio.run(dry_run_pipeline.run())
+            print("\nSimulated benchmark results (dry-run — no real cost):")
             print(result.to_string(index=False))
         elif subcommand == "verify":
             verify_pipeline = VerifyPipeline(settings) if settings else VerifyPipeline()
@@ -1746,8 +1777,14 @@ def main() -> None:
             logger.info("Run manifest is valid: %s", manifest)
         else:
             logger.error(
-                "Unknown subcommand '%s'. Usage: python -m src.main "
-                "[collect|merge|dry-run|verify|models] [--models PRESET_OR_LIST] [--security MODE]",
+                "Unknown subcommand '%s'. Available subcommands:\n"
+                "  models     list model-set presets\n"
+                "  select     interactively build a model set from the live catalog\n"
+                "  dry-run    offline smoke test — no API cost, validates config end to end\n"
+                "  verify     real but free preflight — checks API key + TARGET_MODELS\n"
+                "  collect    Phase 1/3 — real, paid OpenRouter calls\n"
+                "  merge      Phase 3/3 — combine collect output + judge scores into results/\n"
+                "Example: python -m src.main dry-run --models my-preset",
                 subcommand,
             )
             sys.exit(1)

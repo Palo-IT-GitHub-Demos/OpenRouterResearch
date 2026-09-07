@@ -173,9 +173,12 @@ printed `make verify` command before the printed `make collect` command.
 
 When run from a terminal, `make select` asks for the model type, maximum input
 and output prices per 1M tokens, minimum context length, and maximum number of
-models. Enter `skip` to keep the default for any filter. The resulting
-numbered list accepts `0` (the recommended cheapest match) or comma-separated
-numbers such as `1,3`. The chosen IDs are saved locally as `selection`, so the
+models. Press **Enter** or enter `skip` to keep the default for any filter. The
+result shows a numbered preselection of the cheapest matches and additional
+models that also satisfy the filters. `LIMIT` controls the size of the
+preselection; it does not prevent other matching models from being shown. The
+numbered list accepts `0` (the complete recommendation) or comma-separated
+numbers such as `2,7`, including models outside the preselection. The chosen IDs are saved locally as `selection`, so the
 next commands can use the same selection without copying model names:
 
 ```bash
@@ -190,8 +193,21 @@ ignored by Git. Run `make select` again whenever you want to replace it.
 default), `owasp` (30 internally authored probes aligned with the OWASP GenAI
 LLM Top 10 2026 categories — required for the dashboard's RSI/heatmap), or
 `extended` (15 advanced LLM01 red-team probes). These are not official OWASP
-probe files or an OWASP certification. The Streamlit dashboard's **"Plan a new run"** panel does the same
-picking visually and prints the ready-to-run command.
+probe files or an OWASP certification. The profiles serve different purposes:
+
+| Profile | Scope | Recommended use |
+| --- | --- | --- |
+| `basic` | 5 built-in, single-turn injection probes | Fast smoke test and low-cost screening |
+| `owasp` | 30 internal probes aligned with 10 OWASP categories, 3 per category | Broad, repeatable security baseline and heatmap |
+| `extended` | 15 internal, single-turn red-team probes focused on `LLM01` | Stress test for advanced prompt-injection variants |
+
+`extended` is not a broader OWASP taxonomy: it deepens `LLM01` with techniques
+such as encoding, Unicode smuggling, jailbreak framing, typoglycemia and
+few-shot authority spoofing. It does not test multi-turn attacks. Do not
+compare its RSI directly with an `owasp` RSI; compare runs only when their
+scored category set and probe profile/version are the same. The Streamlit
+dashboard's **"Plan a new run"** panel exposes the same profiles visually and
+prints the ready-to-run command.
 
 ### 4. Verify before spending anything
 

@@ -356,8 +356,7 @@ def _build_scan_rows(scan: ScanResult, probes: list[dict[str, str]]) -> dict[str
                     "probe": p.probe_name,
                     "category_id": probe_meta.get(p.probe_name, {}).get("category_id", "LLM00"),
                     "category_name": probe_meta.get(p.probe_name, {}).get("category_name", "Uncategorized"),
-                    "scored": probe_meta.get(p.probe_name, {}).get("category_id", "LLM00")
-                    not in NOT_SCORED_CATEGORIES,
+                    "scored": probe_meta.get(p.probe_name, {}).get("category_id", "LLM00") not in NOT_SCORED_CATEGORIES,
                     "not_scored_reason": NOT_SCORED_CATEGORIES.get(
                         probe_meta.get(p.probe_name, {}).get("category_id", "LLM00"), ""
                     ),

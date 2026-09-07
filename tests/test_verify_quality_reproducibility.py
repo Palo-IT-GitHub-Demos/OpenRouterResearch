@@ -27,9 +27,7 @@ def _result(passed: bool, error: str | None = None) -> RecheckResult:
         ([_result(False)], "inconclusive"),
     ],
 )
-def test_classifies_openrouter_reproducibility(
-    rechecks: list[RecheckResult], expected: str
-) -> None:
+def test_classifies_openrouter_reproducibility(rechecks: list[RecheckResult], expected: str) -> None:
     assert classify_verification(rechecks) == expected
 
 

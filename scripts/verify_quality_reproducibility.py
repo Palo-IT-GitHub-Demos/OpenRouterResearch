@@ -140,8 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
     with httpx.Client(timeout=settings.request_timeout) as client:
         rechecks = [
-            _openrouter_recheck(client, settings, args.model, prompt, accepted_answers)
-            for _ in range(args.rechecks)
+            _openrouter_recheck(client, settings, args.model, prompt, accepted_answers) for _ in range(args.rechecks)
         ]
 
     verification = classify_verification(rechecks)

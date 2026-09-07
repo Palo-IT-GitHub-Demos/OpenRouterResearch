@@ -287,9 +287,7 @@ def load_quality_details(benchmark_path: Path) -> pd.DataFrame:
     or when no prompt/response detail was collected.
     """
     details_path = benchmark_path.parent / "quality_details" / f"{benchmark_path.stem}_quality_details.csv"
-    diagnostics_path = (
-        benchmark_path.parent / "quality_diagnostics" / f"{benchmark_path.stem}_quality_diagnostics.csv"
-    )
+    diagnostics_path = benchmark_path.parent / "quality_diagnostics" / f"{benchmark_path.stem}_quality_diagnostics.csv"
     frames: list[pd.DataFrame] = []
     if details_path.exists():
         details_df = pd.read_csv(details_path)

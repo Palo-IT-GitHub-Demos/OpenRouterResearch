@@ -117,8 +117,7 @@ def build_rsi_bar(security_df: pd.DataFrame) -> go.Figure:
             orientation="h",
             marker_color=colors,
             text=[
-                f"{v:.1f}" + (" \u26a0 confirmed leak" if lk else "")
-                for v, lk in zip(df["rsi"], leaked, strict=True)
+                f"{v:.1f}" + (" \u26a0 confirmed leak" if lk else "") for v, lk in zip(df["rsi"], leaked, strict=True)
             ],
             textposition="outside",
             hovertemplate="Model: %{y}<br>RSI: %{x:.1f}<extra></extra>",

@@ -9,6 +9,7 @@ visualisation des résultats.
 
 | Objectif | Action | Résultat |
 |---|---|---|
+| Choisir des modèles avant le run | `make select` | Questions interactives, présélection recommandée, autres modèles compatibles et sauvegarde locale sous `selection` |
 | Ouvrir le dernier rapport partageable | Ouvrir `results/dashboard_<timestamp>.html` | Page d'accueil avec liens vers Qualité, Preuves, Sécurité et Coûts |
 | Explorer les résultats en direct | `make dashboard` | Dashboard Streamlit sur `http://localhost:8501` |
 | Vérifier la configuration sans coût | `make verify SECURITY=extended` | Validation de la clé, des modèles et des sondes, sans complétion |
@@ -24,6 +25,8 @@ fichier `benchmark_<timestamp>.csv`.
 
 ```mermaid
 flowchart TD
+    selector["make select\ninteractive model selection"] --> selected["MODELS=selection"]
+    selected --> settings["Settings"]
     env[".env config"] --> settings["Settings"]
 
     subgraph phase1["Phase 1 — make collect"]
@@ -81,6 +84,7 @@ flowchart TD
     classDef phase3Style fill:#dcfce7,stroke:#16a34a,color:#14532d
     classDef dataStyle fill:#f3f4f6,stroke:#6b7280,color:#111827
 
+    class selector phase1Style
     class cost,quality,security phase1Style
     class coordinator,anthropic,openai,google phase2Style
     class merge phase3Style
@@ -96,7 +100,7 @@ flowchart TD
 | Variable | Rôle | Défaut |
 |---|---|---|
 | `OPENROUTER_API_KEY` | Clé API OpenRouter (obligatoire) | — |
-| `TARGET_MODELS` | Modèles à benchmarker (virgule-séparés), ou un nom de preset (`free_general`/`paid_flagship`/`mixed_value`, voir `make models`) | 3 modèles gratuits |
+| `TARGET_MODELS` | Modèles à benchmarker (virgule-séparés), un nom de preset, ou `selection` sauvegardée par `make select` | 2 modèles gratuits |
 | `MAX_CONCURRENT_REQUESTS` | `asyncio.Semaphore` — 3 pour le free tier | `3` |
 | `MLFLOW_TRACKING_URI` | Base de données de tracking | `sqlite:///mlruns.db` |
 | `SECURITY_MODE` | Jeu de sondes interne : `basic` (5 sondes built-in), `owasp` (30 sondes alignées sur les 10 catégories OWASP), `extended` (15 sondes red team avancées centrées sur LLM01) | `basic` |
@@ -118,10 +122,12 @@ flowchart TD
 | < 10 USD | 20 | 50 |
 | ≥ 10 USD | 20 | 1000 |
 
-Un `make collect` par défaut (16 prompts qualité × 3 modèles + 5 sondes de
-sécurité × 3 modèles = **63 requêtes**) dépasse déjà le plafond de 50/jour
-d'un compte sans crédit. Avec `SECURITY_PROBES_PATH=data/prompts/owasp_probes.json`
-(30 sondes), le total monte à **138 requêtes** — près de 3× le plafond.
+Un run sur deux modèles gratuits avec le jeu `basic` (16 prompts qualité × 2
+modèles + 5 sondes de sécurité × 2 modèles = **42 requêtes**) reste sous le
+plafond indicatif de 50/jour d'un compte sans crédit. Avec trois modèles, le
+total passerait à **63 requêtes** ; avec
+`SECURITY_PROBES_PATH=data/prompts/owasp_probes.json` (30 sondes), deux modèles
+atteignent déjà **92 requêtes**.
 → Acheter au moins 10 USD de crédits avant un run complet sur des modèles
 `:free`, même si l'objectif est de rester à 0 USD de coût réel.
 
@@ -139,11 +145,53 @@ make inspect-run                 # Vérifie le manifeste et les checksums du der
     `MODELS=` et `SECURITY=` s'appliquent à une seule invocation, sans modifier `.env` :
     ```bash
     make models                                    # liste les presets disponibles
+    make select                                    # sélection interactive depuis le catalogue live
     make verify MODELS=paid_flagship SECURITY=owasp
     make collect MODELS=paid_flagship SECURITY=owasp
     ```
-    Le tableau de bord Streamlit propose le même choix visuellement dans son panneau
-    « Plan a new run » et affiche la commande `make` correspondante.
+        ### Choisir le profil de sécurité
+
+        Les noms `basic`, `owasp` et `extended` désignent des profils de sondes
+        internes, pas des niveaux de conformité ni des suites officielles OWASP.
+
+        - `basic` est adapté à un premier screening rapide.
+        - `owasp` est le profil de référence pour comparer largement les modèles
+            sur les catégories OWASP représentées dans le dépôt.
+        - `extended` ajoute un stress test mono-tour spécialisé sur `LLM01` ; il ne
+            remplace pas `owasp` et ne teste pas les attaques multi-tour.
+
+        Les RSI issus de profils différents ne doivent pas être classés ensemble.
+        Pour une comparaison historique, conserver le même profil, la même version
+        des sondes, le même périmètre `rsi_scored_categories` et la même formule de
+        score.
+
+        `make select` pose les questions de type de modèle, de prix, de contexte et
+    de nombre de résultats. Appuyer sur **Entrée** ou saisir `skip` conserve la
+    valeur par défaut. Après les résultats, `0` accepte toute la présélection
+    recommandée ; une liste comme `2,7` permet aussi de choisir des modèles dans
+    la section « autres modèles compatibles ». La sélection est sauvegardée sous
+    `data/intermediate/model_selection.json` et réutilisée avec :
+    ```bash
+    make verify MODELS=selection
+    make collect MODELS=selection
+    ```
+    Le tableau de bord Streamlit reste principalement une surface d'analyse
+    après le run ; son panneau « Plan a new run » est une aide secondaire.
+
+### Sélection dynamique
+
+`make select` lit le catalogue OpenRouter avec `GET /models`, sans lancer de
+complétion. Les options équivalentes en ligne de commande sont :
+
+```bash
+make select PAID_ONLY=1 MAX_INPUT_PRICE=1 MAX_OUTPUT_PRICE=3 MIN_CONTEXT=32000 LIMIT=6
+```
+
+`LIMIT` est le nombre de modèles dans la présélection recommandée ; il n'est
+pas un maximum global. Jusqu'à 20 autres modèles correspondant aux filtres
+sont également affichés. Le choix interactif est ensuite conservé sous le nom
+`selection`, qui est accepté par `TARGET_MODELS`, `MODELS=` et les commandes
+`verify`, `collect` et `dry-run`.
 
 ---
 

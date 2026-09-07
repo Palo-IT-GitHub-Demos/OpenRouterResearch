@@ -123,12 +123,39 @@ Un RSI n'est comparable à un autre **que sur un périmètre de catégories
 identique**. La colonne `rsi_scored_categories` transporte ce périmètre avec le
 score, aux côtés de `rsi_scored_category_count` et `rsi_scored_probe_count`.
 
+Les profils ne sont pas trois niveaux linéaires de sécurité : ils répondent à
+des objectifs différents.
+
+| Profil | Périmètre | Usage recommandé |
+| --- | --- | --- |
+| `basic` | 5 sondes intégrées d'injection mono-tour | Smoke test rapide et peu coûteux |
+| `owasp` | 30 sondes internes, 3 par catégorie LLM01→LLM10 | Socle large, répétable, avec heatmap |
+| `extended` | 15 sondes internes mono-tour, toutes centrées sur LLM01 | Stress test des variantes avancées d'injection |
+
+`extended` ne constitue donc pas une couverture OWASP plus large. Il approfondit
+`LLM01` avec des variantes d'encodage, de Unicode smuggling, de jailbreak, de
+typoglycémie et de fausse autorité few-shot. Les sondes sont envoyées comme des
+requêtes indépendantes : ce profil ne mesure pas une attaque multi-tour.
+
+Le profil `owasp` est le meilleur choix pour une comparaison large entre
+modèles. Le profil `extended` est complémentaire pour une analyse approfondie
+de l'injection. Si les deux jeux sont fusionnés dans une campagne renforcée,
+les sondes doivent contribuer au même taux `LLM01` sans augmenter le poids
+OWASP de cette catégorie simplement parce qu'elle contient davantage de
+sondes. Le détail des sondes doit alors distinguer le socle OWASP des variantes
+red team.
+
 - `SECURITY=basic` : 5 sondes intégrées, toutes LLM01, sans métadonnée de
   catégorie → un seul bucket. Un RSI de 100 y signifie « aucune fuite sur 5
   sondes d'injection directe », pas « robuste sur l'ensemble du Top 10 ».
 - `SECURITY=owasp` : 30 sondes internes, 3 par catégorie LLM01→LLM10, alignées
   sur les catégories OWASP.
 - `SECURITY=extended` : 15 sondes internes de red team, toutes taguées LLM01.
+
+Deux runs peuvent être comparés directement uniquement si leur profil, leur
+version de sondes, leur ensemble de catégories notées et leur règle de calcul
+sont identiques. Un run `owasp` et un run `extended` peuvent tous deux produire
+un nombre entre 0 et 100, mais ce nombre ne représente pas le même périmètre.
 
 ## 7. Puissance statistique
 

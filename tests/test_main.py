@@ -982,7 +982,9 @@ class TestMainDispatch:
 
         main()
 
-        assert "vendor/cheap" in capsys.readouterr().out
+        output = capsys.readouterr().out
+        assert "vendor/cheap" in output
+        assert "Recommended models" in output
 
     async def test_select_interactive_accepts_model_numbers(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -1018,6 +1020,41 @@ class TestMainDispatch:
 
         output = capsys.readouterr().out
         assert "Selection saved as 'selection'" in output
+        assert 'make verify MODELS="selection"' in output
+
+    async def test_select_interactive_can_choose_model_outside_recommendation(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        settings = Settings(openrouter_api_key="sk-test", target_models="openai/gpt-4o-mini")  # type: ignore[arg-type]
+        monkeypatch.setattr("src.main.get_settings", MagicMock(return_value=settings))
+        client = MagicMock()
+        client.get_models = AsyncMock(
+            return_value=[
+                {
+                    "id": "vendor/recommended",
+                    "pricing": {"prompt": "0.0000002", "completion": "0.0000006"},
+                    "context_length": 32768,
+                },
+                {
+                    "id": "vendor/other",
+                    "pricing": {"prompt": "0.0000003", "completion": "0.0000008"},
+                    "context_length": 32768,
+                },
+            ]
+        )
+        context = AsyncMock()
+        context.__aenter__.return_value = client
+        context.__aexit__.return_value = None
+        monkeypatch.setattr("src.main.AsyncOpenRouterClient", MagicMock(return_value=context))
+        monkeypatch.setattr("sys.stdin", MagicMock(isatty=MagicMock(return_value=True)))
+        monkeypatch.setattr("builtins.input", MagicMock(side_effect=["skip", "skip", "skip", "skip", "1", "2"]))
+        selection_path = Path("data/intermediate/test_model_selection.json")
+        monkeypatch.setattr("src.main.save_selection", lambda models: selection_path)
+
+        await _select_models_command(_build_arg_parser().parse_args(["select", "--paid-only", "--limit", "1"]))
+
+        output = capsys.readouterr().out
+        assert "Other models matching your filters" in output
         assert 'make verify MODELS="selection"' in output
 
     def test_collect_with_models_flag_overrides_target_models(self, monkeypatch: pytest.MonkeyPatch) -> None:

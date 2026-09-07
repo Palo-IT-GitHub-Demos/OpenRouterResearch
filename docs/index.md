@@ -21,6 +21,7 @@ sécurité, afin de constituer une shortlist avant l'évaluation métier dans
 | Consulter le dernier rapport partageable | Ouvrir `results/dashboard_<timestamp>.html` ; sa navigation mène aux pages Qualité, Preuves, Sécurité et Coûts. |
 | Explorer un résultat avec filtres | Lancer `make dashboard`, puis ouvrir `http://localhost:8501`. |
 | Générer le rapport HTML du dernier benchmark fusionné | Lancer `make export-html`. |
+| Choisir les modèles avant un run | Lancer `make select`, répondre aux filtres, puis utiliser `MODELS=selection`. |
 
 Le [workflow du pipeline](workflow.md) indique les commandes dans l'ordre,
 depuis la vérification gratuite jusqu'au rapport final.
