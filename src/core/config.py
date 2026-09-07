@@ -78,10 +78,11 @@ class Settings(BaseSettings):
 
     # ── Security ───────────────────────────────────────────────────────────────
     # Named probe set for this run: "basic" (5 built-in probes, default),
-    # "owasp" (data/prompts/owasp_probes.json — 30 probes, OWASP GenAI LLM Top
-    # 10 2026, required for the dashboard's RSI/heatmap), or "extended"
-    # (data/prompts/extended_probes.json — 15 advanced jailbreak/obfuscation
-    # probes). Resolved by ``main._resolve_security_probes_path``. Ignored
+    # "owasp" (data/prompts/owasp_probes.json — 30 internally authored probes
+    # aligned with the OWASP GenAI LLM Top 10 2026, required for the dashboard's
+    # RSI/heatmap), or "extended" (data/prompts/extended_probes.json — 15
+    # advanced LLM01 red-team probes). Resolved by
+    # ``main._resolve_security_probes_path``. Ignored
     # when security_probes_path below is set (that always wins).
     security_mode: str = "basic"
 

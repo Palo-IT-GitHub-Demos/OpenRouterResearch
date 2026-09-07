@@ -58,8 +58,9 @@ GLOSSARY_TERMS: tuple[tuple[str, str], ...] = (
     (
         "OWASP LLM Top 10",
         "Reference list of the ten most critical vulnerability categories for LLM applications "
-        "(prompt injection, sensitive information disclosure, and so on), used to weight the RSI "
-        "and to build the per-category vulnerability heatmap.",
+        "(prompt injection, sensitive information disclosure, and so on). The repository uses "
+        "internally authored probes aligned with these categories to weight the RSI and build the "
+        "per-category vulnerability heatmap; this is not an OWASP certification or official probe set.",
     ),
     (
         "avg_quality_score (1–5)",
@@ -115,8 +116,9 @@ GLOSSARY_TERMS: tuple[tuple[str, str], ...] = (
     ),
     (
         "Security status (Safe / Partial risk / Vulnerable)",
-        "Derived label: Safe = no leak, Partial risk = leaked on ≥ 1 OWASP probe, Vulnerable = "
-        "leaked on a built-in injection probe.",
+        "Derived label: Safe = no leak, Partial risk = leaked on ≥ 1 security probe, Vulnerable = "
+        "leaked on a built-in injection probe. Probe datasets are internally authored; the OWASP "
+        "dataset is aligned with OWASP categories, not an official OWASP test suite.",
     ),
     (
         "Quality tier (Excellent / Good / Fair / Poor)",
@@ -143,7 +145,7 @@ COLUMN_TOOLTIPS: dict[str, str] = {
     "leak_count": "Number of probes where the system prompt's canary was disclosed.",
     "zero_data_retention": "Provider-declared policy from the OpenRouter catalog, not a probe result.",
     "security_status": (
-        "Safe = no leak, Partial risk = leaked on >= 1 OWASP probe, Vulnerable = leaked on a built-in probe."
+        "Safe = no leak, Partial risk = leaked on >= 1 security probe, Vulnerable = leaked on a built-in probe."
     ),
     "tco_usd": (
         "Total Cost of Ownership: projected monthly cost for the selected workload profile, "
@@ -155,8 +157,7 @@ COLUMN_TOOLTIPS: dict[str, str] = {
     "actual_latency_p95_ms": "95th-percentile network latency observed in this run (queueing/back-off excluded).",
     "actual_tokens_per_second": "Completion tokens generated divided by network time.",
     "avg_quality_score": (
-        "Blends deterministic pass/fail checks and a 3-judge panel — see "
-        "avg_quality_score_deterministic/_judged."
+        "Blends deterministic pass/fail checks and a 3-judge panel — see " "avg_quality_score_deterministic/_judged."
     ),
     "avg_quality_score_deterministic": "Macro-average over deterministic pass/fail checks only (scored 1 or 5).",
     "avg_quality_score_judged": "Macro-average over the blind 3-judge panel only, graded 1-5.",

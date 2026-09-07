@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from src.core.model_selector import load_selection
+
 
 @dataclass(frozen=True)
 class ModelPreset:
@@ -30,13 +32,12 @@ class ModelPreset:
 MODEL_PRESETS: dict[str, ModelPreset] = {
     "free_general": ModelPreset(
         description=(
-            "Cross-provider free-tier trio (Google, Cohere, NVIDIA) for broad, "
-            "zero-cost quality and security screening."
+            "Two-model free-tier comparison (Google and Cohere) kept small enough "
+            "for the default basic probe set on a 50-request daily quota."
         ),
         models=(
             "google/gemma-4-31b-it:free",
             "cohere/north-mini-code:free",
-            "nvidia/nemotron-3-super-120b-a12b:free",
         ),
     ),
     "paid_flagship": ModelPreset(
@@ -46,6 +47,16 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         models=(
             "anthropic/claude-sonnet-5",
             "meta-llama/llama-3.3-70b-instruct",
+            "openai/gpt-4o-mini",
+        ),
+    ),
+    "budget_paid": ModelPreset(
+        description=(
+            "Low-cost paid alternatives for comparing economical production models "
+            "without using free-tier request quotas."
+        ),
+        models=(
+            "mistralai/mistral-small-3.1-24b-instruct",
             "openai/gpt-4o-mini",
         ),
     ),
@@ -66,8 +77,8 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
 def resolve_models_arg(value: str, *, strict: bool = False) -> list[str]:
     """Resolve a ``TARGET_MODELS``/``--models`` value to explicit model IDs.
 
-    *value* is either a preset name (see :data:`MODEL_PRESETS`) or a
-    comma-separated list of explicit OpenRouter model IDs. A bare token is
+    *value* is either a preset name (see :data:`MODEL_PRESETS`), the saved
+    ``selection`` name, or a comma-separated list of explicit OpenRouter model IDs. A bare token is
     treated as a preset name when it has no ``,`` and no ``/`` — every real
     OpenRouter model ID contains a ``/`` (``vendor/model-name``), so this
     never misclassifies an actual model list.
@@ -84,6 +95,8 @@ def resolve_models_arg(value: str, *, strict: bool = False) -> list[str]:
         A list of explicit OpenRouter model IDs.
     """
     cleaned = value.strip()
+    if cleaned == "selection":
+        return load_selection()
     looks_like_preset = bool(cleaned) and "," not in cleaned and "/" not in cleaned
     if looks_like_preset:
         preset = MODEL_PRESETS.get(cleaned)

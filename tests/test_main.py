@@ -23,9 +23,11 @@ from src.main import (
     CollectPipeline,
     MergePipeline,
     VerifyPipeline,
+    _build_arg_parser,
     _enforce_collect_error_budget,
     _estimate_free_tier_request_volume,
     _resolve_security_probes_path,
+    _select_models_command,
     _unknown_target_models,
     _validate_pending_payload,
     _warn_on_free_tier_request_volume,
@@ -719,9 +721,7 @@ class TestMergePipelineRun:
         assert list(results_dir.glob("benchmark_*.csv"))
         assert list(results_dir.glob("benchmark_*.json"))
 
-    def test_exports_quality_collection_diagnostics(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_exports_quality_collection_diagnostics(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         pending = {
             "timestamp": "20260101_000000",
             "models": ["model-a"],
@@ -957,6 +957,68 @@ class TestMainDispatch:
         out = capsys.readouterr().out
         assert "free_general" in out
         assert "paid_flagship" in out
+
+    def test_select_subcommand_prints_dynamic_selection(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(sys, "argv", ["prog", "select", "--paid-only", "--limit", "1"])
+        settings = Settings(openrouter_api_key="sk-test", target_models="openai/gpt-4o-mini")  # type: ignore[arg-type]
+        monkeypatch.setattr("src.main.get_settings", MagicMock(return_value=settings))
+        client = MagicMock()
+        client.get_models = AsyncMock(
+            return_value=[
+                {"id": "vendor/free:free", "pricing": {"prompt": "0", "completion": "0"}, "context_length": 8192},
+                {
+                    "id": "vendor/cheap",
+                    "pricing": {"prompt": "0.0000002", "completion": "0.0000006"},
+                    "context_length": 32768,
+                },
+            ]
+        )
+        context = AsyncMock()
+        context.__aenter__.return_value = client
+        context.__aexit__.return_value = None
+        monkeypatch.setattr("src.main.AsyncOpenRouterClient", MagicMock(return_value=context))
+
+        main()
+
+        assert "vendor/cheap" in capsys.readouterr().out
+
+    async def test_select_interactive_accepts_model_numbers(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        settings = Settings(openrouter_api_key="sk-test", target_models="openai/gpt-4o-mini")  # type: ignore[arg-type]
+        monkeypatch.setattr("src.main.get_settings", MagicMock(return_value=settings))
+        client = MagicMock()
+        client.get_models = AsyncMock(
+            return_value=[
+                {
+                    "id": "vendor/cheap-a",
+                    "pricing": {"prompt": "0.0000002", "completion": "0.0000006"},
+                    "context_length": 32768,
+                },
+                {
+                    "id": "vendor/cheap-b",
+                    "pricing": {"prompt": "0.0000003", "completion": "0.0000008"},
+                    "context_length": 32768,
+                },
+            ]
+        )
+        context = AsyncMock()
+        context.__aenter__.return_value = client
+        context.__aexit__.return_value = None
+        monkeypatch.setattr("src.main.AsyncOpenRouterClient", MagicMock(return_value=context))
+        monkeypatch.setattr("sys.stdin", MagicMock(isatty=MagicMock(return_value=True)))
+        monkeypatch.setattr(
+            "builtins.input",
+            MagicMock(return_value="2", side_effect=["skip", "skip", "skip", "skip", "skip", "2"]),
+        )
+
+        await _select_models_command(_build_arg_parser().parse_args(["select", "--paid-only", "--limit", "2"]))
+
+        output = capsys.readouterr().out
+        assert "Selection saved as 'selection'" in output
+        assert 'make verify MODELS="selection"' in output
 
     def test_collect_with_models_flag_overrides_target_models(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "argv", ["prog", "collect", "--models", "paid_flagship"])

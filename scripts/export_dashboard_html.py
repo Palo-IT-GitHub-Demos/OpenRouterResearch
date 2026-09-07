@@ -94,8 +94,7 @@ h3 { margin-top: 1.8rem; }
 """
 
 _GLOSSARY_INTRO = (
-    "This document is a static snapshot of the LLM model screening dashboard (OpenRouter). "
-    + GLOSSARY_INTRO
+    "This document is a static snapshot of the LLM model screening dashboard (OpenRouter). " + GLOSSARY_INTRO
 )
 
 _GLOSSARY_HTML = glossary_html(_GLOSSARY_INTRO)
@@ -248,6 +247,9 @@ def _overview_section(df: pd.DataFrame) -> str:
 
     return f"""
     <h2 id="overview">Overview</h2>
+    <p class="callout"><strong>How to read this:</strong> quality runs from 1 (poor) to 5 (excellent),
+    while input-token cost is better when lower. The Pareto frontier highlights models that cannot be
+    beaten on both quality and cost at the same time.</p>
     <div class="kpi-row">{kpi_cards}</div>
     <p class="callout">The best models sit in the top-left of the chart: high quality score for a
     low cost. The dashed line traces the Pareto frontier — no model on it is beaten on both cost
@@ -310,6 +312,9 @@ def _quality_section(df: pd.DataFrame) -> str:
 
     return f"""
     <h2 id="quality">Quality screen</h2>
+    <p class="callout"><strong>How to read this:</strong> the quality score is an average from 1 (poor)
+    to 5 (excellent). Coverage tells you how much of the test was completed; stability tells you whether
+    repeated tests agree; CER eligibility means there is enough evidence to compare value.</p>
     <p class="callout">Generic pre-selection signal — not a business recommendation.
     Use <code>gen-e2-eval</code> for a use-case evaluation after this screening.</p>
     <div class="table-wrap">{table}</div>
@@ -323,9 +328,7 @@ def _prompts_responses_section(quality_details_df: pd.DataFrame, security_probe_
     <code>results/quality_details/</code> for runs merged after this feature was added.</p>
     """
     if not quality_details_df.empty:
-        evidence_status = quality_details_df.get(
-            "evidence_status", pd.Series("Scored", index=quality_details_df.index)
-        )
+        evidence_status = quality_details_df.get("evidence_status", pd.Series("Scored", index=quality_details_df.index))
         scored_df = quality_details_df.loc[evidence_status == "Scored"]
         anomalies_df = quality_details_df.loc[evidence_status == "Collection anomaly"]
         quality_parts: list[str] = []
@@ -416,7 +419,6 @@ def _prompts_responses_section(quality_details_df: pd.DataFrame, security_probe_
     """
 
 
-
 def _security_section(df: pd.DataFrame) -> str:
     charts = ""
     if "rsi" in df.columns:
@@ -463,6 +465,10 @@ def _security_section(df: pd.DataFrame) -> str:
 
     return f"""
     <h2 id="security">Security</h2>
+    <p class="callout"><strong>How to read this:</strong> RSI is a safety score from 0 to 100, where
+    higher is safer. A leak means a probe exposed hidden instructions. Probe errors are technical
+    failures, not safe answers, so read the error rate beside RSI. ZDR is a provider data-retention
+    policy, not a probe result.</p>
     <p class="callout">Injection probes try to leak the system prompt across the OWASP GenAI LLM
     Top 10 categories — a generic robustness screening, not a full penetration test. A confirmed
     leak caps the RSI below the robust threshold.{perimeter}</p>
@@ -538,6 +544,9 @@ def _cost_section(df: pd.DataFrame, profile_name: str, profile: WorkloadProfile)
 
     return f"""
     <h2 id="cost">Cost intelligence</h2>
+    <p class="callout"><strong>How to read this:</strong> TCO is the estimated monthly bill for the
+    selected usage pattern, not the cost of this benchmark. CER is quality per dollar, normalised so
+    1.0 is the best eligible model in this comparison. Actual run cost is what OpenRouter reported.</p>
     <p class="meta">Workload profile: <strong>{profile_name}</strong> —
     {profile.daily_requests} requests/day · {profile.avg_prompt_tokens} input tokens/request ·
     {profile.avg_completion_tokens} output tokens/request · {profile.working_days_per_month}
@@ -557,13 +566,17 @@ def _performance_section(df: pd.DataFrame) -> str:
         "actual_cost_call_count",
     ]
     performance_df = df[[c for c in performance_columns if c in df.columns]].copy()
-    has_latency_data = "actual_latency_p50_ms" in performance_df.columns and pd.to_numeric(
-        performance_df["actual_latency_p50_ms"], errors="coerce"
-    ).notna().any()
+    has_latency_data = (
+        "actual_latency_p50_ms" in performance_df.columns
+        and pd.to_numeric(performance_df["actual_latency_p50_ms"], errors="coerce").notna().any()
+    )
 
     if not has_latency_data:
         return """
         <h2 id="performance">Performance</h2>
+        <p class="callout"><strong>How to read this:</strong> p50 is the typical response time, p95 is a
+        slower-case response time, and tokens/second is how quickly the model generated its answer. Lower
+        latency and higher throughput are generally better.</p>
         <p class="callout">No per-call latency data in this run \u2014 expected for <code>make dry-run</code>
         (no real network calls) or a legacy result predating this metric. Run a new <code>make collect</code>
         and <code>make merge</code>.</p>

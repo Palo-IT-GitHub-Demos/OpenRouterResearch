@@ -29,6 +29,13 @@ from src.api.openrouter_client import (
 )
 from src.core.config import Settings, get_settings
 from src.core.model_presets import format_model_presets, resolve_models_arg
+from src.core.model_selector import (
+    catalog_entries,
+    estimate_cost_usd,
+    estimate_requests,
+    save_selection,
+    select_models,
+)
 from src.core.run_manifest import inspect_run_manifest, write_run_manifest
 from src.evaluators.cost_analyzer import (
     BUILTIN_WORKLOAD_PROFILES,
@@ -160,8 +167,9 @@ def _resolve_security_probes_path(settings: Settings) -> Path | None:
     ``security_probes_path`` (an explicit custom-file override) always wins;
     otherwise ``security_mode`` selects a named, pre-wired set so callers
     never have to remember/type a file path: "basic" (built-in), "owasp"
-    (30 probes / OWASP GenAI LLM Top 10 2026 — required for the dashboard's
-    RSI/heatmap), or "extended" (15 advanced jailbreak/obfuscation probes).
+    (30 internally authored probes aligned with the OWASP GenAI LLM Top 10 2026
+    categories — required for the dashboard's RSI/heatmap), or "extended"
+    (15 advanced LLM01 red-team probes).
     """
     if settings.security_probes_path:
         return Path(settings.security_probes_path)
@@ -697,9 +705,7 @@ def _validate_pending_payload(payload: dict[str, object]) -> None:
         if not all(isinstance(alias, str) and isinstance(model, str) for alias, model in alias_map.items()):
             raise ValueError(f"Invalid pending artifact: pending judgment {index} has invalid aliases.")
         if not isinstance(responses, dict) or set(responses) != set(alias_map):
-            raise ValueError(
-                f"Invalid pending artifact: pending judgment {index} responses do not match alias_map."
-            )
+            raise ValueError(f"Invalid pending artifact: pending judgment {index} responses do not match alias_map.")
 
 
 # ── Phase 1: CollectPipeline ───────────────────────────────────────────────────
@@ -1564,6 +1570,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=("Security probe set for this run only. Overrides SECURITY_MODE. " "Ignored by merge/models."),
     )
+    parser.add_argument("--paid-only", action="store_true", help="Keep only paid models for 'select'.")
+    parser.add_argument("--free-only", action="store_true", help="Keep only zero-priced/free-tier models for 'select'.")
+    parser.add_argument("--max-input-price", type=float, default=None, help="Maximum input price per 1M tokens.")
+    parser.add_argument("--max-output-price", type=float, default=None, help="Maximum output price per 1M tokens.")
+    parser.add_argument("--min-context", type=int, default=None, help="Minimum context length in tokens.")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=6,
+        help="Default maximum models for 'select' (default: 6; enter another value to change it).",
+    )
     return parser
 
 
@@ -1581,6 +1598,112 @@ def _settings_override_from_args(args: argparse.Namespace) -> Settings | None:
     return get_settings().model_copy(update=overrides)
 
 
+async def _select_models_command(args: argparse.Namespace) -> None:
+    """Preview a dynamic catalog selection and print ready-to-run commands."""
+    settings = get_settings()
+    async with AsyncOpenRouterClient(settings) as client:
+        catalog = catalog_entries(await client.get_models())
+
+    paid_only = args.paid_only
+    free_only = args.free_only
+    max_input_price = args.max_input_price
+    max_output_price = args.max_output_price
+    min_context = args.min_context
+    limit = args.limit
+    if sys.stdin.isatty():
+        kind = input("Model type [1=paid, 2=free, 3=all, skip=all]: ").strip().lower()
+        if kind == "1":
+            paid_only, free_only = True, False
+        elif kind == "2":
+            paid_only, free_only = False, True
+        elif kind not in {"", "3", "skip", "s"}:
+            raise ValueError("Invalid model type. Choose 1, 2, 3, or skip.")
+
+        def ask_number(label: str, default: float | int | None) -> float | int | None:
+            answer = input(f"{label} [{default if default is not None else 'skip'}]: ").strip().lower()
+            if answer in {"", "skip", "s"}:
+                return default
+            try:
+                return float(answer) if "." in answer else int(answer)
+            except ValueError as exc:
+                raise ValueError(f"Invalid value for {label}.") from exc
+
+        max_input_price = ask_number("Maximum input price per 1M tokens", max_input_price)
+        max_output_price = ask_number("Maximum output price per 1M tokens", max_output_price)
+        min_context = ask_number("Minimum context length", min_context)
+        limit_value = ask_number("Maximum number of models", limit)
+        if not isinstance(limit_value, int):
+            raise ValueError("Maximum number of models must be a whole number.")
+        limit = limit_value
+
+    entries = select_models(
+        catalog,
+        paid_only=paid_only,
+        free_only=free_only,
+        max_input_price_per_million=max_input_price,
+        max_output_price_per_million=max_output_price,
+        min_context_length=min_context,
+        limit=limit,
+    )
+    if not entries:
+        raise ValueError("No models match the selection filters.")
+
+    print("Available models:")
+    for index, entry in enumerate(entries, start=1):
+        kind = "free" if entry.is_free else "paid"
+        print(
+            f"  {index}. {entry.model_id} | {kind} | "
+            f"${entry.input_price_per_token * 1_000_000:.4f} input / "
+            f"${entry.output_price_per_token * 1_000_000:.4f} output per 1M tokens | "
+            f"context {entry.context_length:,}"
+        )
+    if sys.stdin.isatty():
+        print(
+            "\nSelection: 0 = use the recommendation, numbers = choose models "
+            "(for example 1,3), skip = use recommendation"
+        )
+        selection = input("Your choice [0]: ").strip().lower()
+        if selection in {"", "0", "skip", "s"}:
+            entries = entries[:1]
+        else:
+            try:
+                indexes = [int(value.strip()) for value in selection.split(",")]
+                if (
+                    not indexes
+                    or len(set(indexes)) != len(indexes)
+                    or any(index < 1 or index > len(entries) for index in indexes)
+                ):
+                    raise ValueError
+                entries = [entries[index - 1] for index in indexes]
+            except ValueError as exc:
+                raise ValueError("Invalid selection. Use 0, skip, or comma-separated model numbers.") from exc
+
+    models = [entry.model_id for entry in entries]
+    prompt_count, _dimension_count, _suite_id = _quality_screen_metadata(_QUALITY_PROMPTS)
+    probes_path = _resolve_security_probes_path(settings)
+    request_count = estimate_requests(
+        len(models), prompt_count or 0, _security_probe_count_for_estimate(probes_path), settings.quality_repetitions
+    )
+    monthly_cost = estimate_cost_usd(entries)
+    print("\nSelected models (no benchmark has been started):")
+    for entry in entries:
+        kind = "free" if entry.is_free else "paid"
+        print(
+            f"  - {entry.model_id} | {kind} | "
+            f"${entry.input_price_per_token * 1_000_000:.4f} input / "
+            f"${entry.output_price_per_token * 1_000_000:.4f} output per 1M tokens | "
+            f"context {entry.context_length:,}"
+        )
+    print(f"Estimated requests: {request_count}")
+    print(f"Estimated monthly cost for all selected models: ${monthly_cost:.2f}")
+    _warn_on_free_tier_request_volume(request_count)
+    selection_path = save_selection(models)
+    print(f"Selection saved as 'selection' in {selection_path}.")
+    print("\nNext steps:")
+    print('  make verify MODELS="selection"')
+    print('  make collect MODELS="selection"')
+
+
 _SETTINGS_AWARE_SUBCOMMANDS = ("run", "collect", "dry-run", "dryrun", "verify")
 
 
@@ -1591,6 +1714,10 @@ def main() -> None:
 
         if subcommand == "models":
             print(format_model_presets())
+            return
+
+        if subcommand == "select":
+            asyncio.run(_select_models_command(args))
             return
 
         settings = _settings_override_from_args(args) if subcommand in _SETTINGS_AWARE_SUBCOMMANDS else None

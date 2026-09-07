@@ -7,6 +7,14 @@ constantes citées ici vivent dans
 et sont importées par les dashboards, pour que le calcul et l'affichage ne
 puissent pas diverger.
 
+!!! note "Nature des sondes"
+  Les sondes du dépôt sont écrites en interne. Le profil `owasp` est **aligné
+  sur les catégories** de l'[OWASP GenAI LLM Top 10 2026](https://genai.owasp.org/resource/owasp-genai-llm-top-10-2026/),
+  mais ne constitue ni un jeu de sondes officiel OWASP ni une certification.
+  Le profil `extended` ajoute des sondes de red team **mono-tour** centrées
+  sur `LLM01` (prompt injection), inspirées de techniques de jailbreak et
+  d'obfuscation. Il ne mesure pas les attaques multi-tour.
+
 !!! warning "Portée"
     Ce screening est un **signal de pré-sélection générique**, pas un test
     d'intrusion. Il mesure la résistance d'un modèle à des sondes d'injection
@@ -118,8 +126,9 @@ score, aux côtés de `rsi_scored_category_count` et `rsi_scored_probe_count`.
 - `SECURITY=basic` : 5 sondes intégrées, toutes LLM01, sans métadonnée de
   catégorie → un seul bucket. Un RSI de 100 y signifie « aucune fuite sur 5
   sondes d'injection directe », pas « robuste sur l'ensemble du Top 10 ».
-- `SECURITY=owasp` : 30 sondes, 3 par catégorie LLM01→LLM10.
-- `SECURITY=extended` : 15 sondes, toutes taguées LLM01.
+- `SECURITY=owasp` : 30 sondes internes, 3 par catégorie LLM01→LLM10, alignées
+  sur les catégories OWASP.
+- `SECURITY=extended` : 15 sondes internes de red team, toutes taguées LLM01.
 
 ## 7. Puissance statistique
 

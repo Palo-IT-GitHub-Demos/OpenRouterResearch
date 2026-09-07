@@ -42,8 +42,14 @@ from src.evaluators.cost_analyzer import BUILTIN_WORKLOAD_PROFILES
 _RESULTS_DIR = Path("results")
 _SECURITY_MODE_HELP = {
     "basic": "5 built-in probes — fastest, always available.",
-    "owasp": "30 probes across the OWASP GenAI LLM Top 10 2026 (10 categories) — populates the heatmap/RSI below.",
-    "extended": "15 advanced jailbreak/obfuscation probes (base64, unicode smuggling, DAN, payload splitting…).",
+    "owasp": (
+        "30 internal probes aligned with the 10 OWASP GenAI LLM Top 10 2026 "
+        "categories — populates the heatmap/RSI below."
+    ),
+    "extended": (
+        "15 advanced red-team probes focused on LLM01 prompt injection "
+        "(base64, Unicode smuggling, DAN, typoglycemia, few-shot spoofing…)."
+    ),
 }
 
 st.set_page_config(
@@ -75,7 +81,8 @@ with st.expander(":material/help: How to read this dashboard", expanded=False):
         "tab breaks the score down per dimension, and the **Prompts & responses** tab shows the exact "
         "text sent to and returned by each model.\n"
         "\n"
-        "**:material/security: Security (RSI 0–100)** — `rsi` weighs OWASP LLM Top 10 categories by "
+        "**:material/security: Security (RSI 0–100)** — `rsi` weighs internally authored probe results "
+        "aligned with OWASP LLM Top 10 categories by "
         "criticality, over the categories a single-turn chat probe can actually exercise "
         "(`rsi_scored_categories`); categories marked `*` are reported but excluded. A **confirmed "
         "leak caps the RSI below the robust band**, because a proven disclosure is evidence of "
@@ -201,6 +208,11 @@ if not quality_details_df.empty:
 # ── Overview ──────────────────────────────────────────────────────────────────
 
 with tab_overview:
+    st.caption(
+        "How to read this view: quality is scored from 1 to 5 (higher is better), while cost is the "
+        "estimated price for 1 million input tokens (lower is better). The Pareto frontier highlights "
+        "models that cannot be beaten on both measures at once."
+    )
     plot_df = df.dropna(subset=["cost_per_1m_tokens_usd", "avg_quality_score"])
     pareto_df = compute_pareto_front(
         plot_df,
@@ -291,6 +303,11 @@ with tab_overview:
 
 with tab_quality:
     st.subheader("Generic quality-screen confidence")
+    st.caption(
+        "Plain-English guide: the quality score is an average from 1 (poor) to 5 (excellent). "
+        "Coverage tells you how much of the test was completed; stability tells you whether repeated "
+        "tests give similar results; CER eligibility means there is enough evidence to compare value."
+    )
     st.info(
         "This is a broad pre-selection signal, not a domain recommendation. "
         "Use gen-e2-eval for task-specific acceptance testing after shortlisting."
@@ -329,8 +346,7 @@ with tab_quality:
             int(cer_eligible.sum()),
             border=True,
             help=(
-                "Models with enough coverage (≥ 80% prompts, 100% dimensions) to trust their "
-                "Cost-Efficiency Ratio."
+                "Models with enough coverage (≥ 80% prompts, 100% dimensions) to trust their " "Cost-Efficiency Ratio."
             ),
         )
 
@@ -669,12 +685,16 @@ with tab_security:
         "Injection probes attempt to leak the system prompt across OWASP GenAI LLM Top 10 categories. "
         "This is a generic robustness screen, not a full penetration test."
     )
+    st.caption(
+        "Plain-English guide: RSI is a safety score from 0 to 100, where higher is safer. A leak means "
+        "a probe exposed the hidden instructions. Probe errors are technical failures, not safe answers, "
+        "so always read the error rate next to RSI. ZDR means the provider says it does not retain data; "
+        "it is a provider policy, not a test result."
+    )
 
     zdr_count = int(df["zero_data_retention"].fillna(False).astype(bool).sum())
     with st.container(horizontal=True):
-        st.metric(
-            "Models scanned", len(df), border=True, help="Number of models probed in the current selection."
-        )
+        st.metric("Models scanned", len(df), border=True, help="Number of models probed in the current selection.")
         st.metric(
             "Flagged vulnerable",
             int((df["security_status"] == "Vulnerable").sum()),
@@ -743,9 +763,7 @@ with tab_security:
             "rsi_scored_probe_count",
             "zero_data_retention",
         ]
-        security_summary = df[[column for column in summary_columns if column in df.columns]].drop_duplicates(
-            "model"
-        )
+        security_summary = df[[column for column in summary_columns if column in df.columns]].drop_duplicates("model")
         st.dataframe(
             security_summary.style.map(_tint_status, subset=["security_status"]),
             width="stretch",
@@ -754,8 +772,7 @@ with tab_security:
                 "security_status": st.column_config.TextColumn(
                     "Status",
                     help=(
-                        "Safe: no leak. Partial risk: leaked on ≥ 1 probe. Vulnerable: leaked on a "
-                        "built-in probe."
+                        "Safe: no leak. Partial risk: leaked on ≥ 1 probe. Vulnerable: leaked on a " "built-in probe."
                     ),
                 ),
                 "rsi": st.column_config.ProgressColumn(
@@ -803,6 +820,11 @@ with tab_security:
 
 with tab_cost:
     st.subheader("Cost intelligence")
+    st.caption(
+        "Plain-English guide: TCO is the estimated monthly bill for the selected usage pattern, not the "
+        "bill for this benchmark. CER is quality per dollar, normalised so 1.0 is the best eligible model "
+        "in this comparison. Actual run cost is what OpenRouter reported for this run."
+    )
     profile_name = st.selectbox(
         "Workload profile",
         options=list(BUILTIN_WORKLOAD_PROFILES),
@@ -960,6 +982,11 @@ with tab_performance:
         "benchmark. Latency excludes time spent queueing behind `MAX_CONCURRENT_REQUESTS` and retry "
         "back-off waits, so it reflects the model/provider's actual response time."
     )
+    st.caption(
+        "Plain-English guide: p50 is the typical response time (half of calls were faster), p95 is a "
+        "slower-case response time (95% were faster), and tokens/second is how quickly the model "
+        "generated its answer. Lower latency and higher throughput are generally better."
+    )
 
     performance_columns = [
         "model",
@@ -969,9 +996,10 @@ with tab_performance:
         "actual_cost_call_count",
     ]
     performance_df = df[[c for c in performance_columns if c in df.columns]].copy()
-    has_latency_data = "actual_latency_p50_ms" in performance_df.columns and _numeric_series(
-        performance_df, "actual_latency_p50_ms"
-    ).notna().any()
+    has_latency_data = (
+        "actual_latency_p50_ms" in performance_df.columns
+        and _numeric_series(performance_df, "actual_latency_p50_ms").notna().any()
+    )
 
     if not has_latency_data:
         st.info(

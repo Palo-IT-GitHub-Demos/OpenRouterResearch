@@ -99,7 +99,7 @@ flowchart TD
 | `TARGET_MODELS` | Modèles à benchmarker (virgule-séparés), ou un nom de preset (`free_general`/`paid_flagship`/`mixed_value`, voir `make models`) | 3 modèles gratuits |
 | `MAX_CONCURRENT_REQUESTS` | `asyncio.Semaphore` — 3 pour le free tier | `3` |
 | `MLFLOW_TRACKING_URI` | Base de données de tracking | `sqlite:///mlruns.db` |
-| `SECURITY_MODE` | Jeu de sondes nommé : `basic` (5 sondes built-in), `owasp` (30 sondes), `extended` (15 sondes avancées) | `basic` |
+| `SECURITY_MODE` | Jeu de sondes interne : `basic` (5 sondes built-in), `owasp` (30 sondes alignées sur les 10 catégories OWASP), `extended` (15 sondes red team avancées centrées sur LLM01) | `basic` |
 | `SECURITY_PROBES_PATH` | Fichier de sondes custom (optionnel, prioritaire sur `SECURITY_MODE`) | — |
 | `QUALITY_REPETITIONS` | Répétitions de chaque prompt qualité (1-5) | `1` |
 | `WORKLOAD_PROFILE` | Profil de charge pour le TCO | `enterprise_qa` |
@@ -351,8 +351,9 @@ l'export de `expected_answers_json` restent consultables mais ne peuvent pas
 
 ### Sondes OWASP LLM Top 10
 
-`data/prompts/owasp_probes.json` — 30 sondes réparties sur 10 catégories,
-alignées sur l'[OWASP GenAI LLM Top 10 2026](https://genai.owasp.org/resource/owasp-genai-llm-top-10-2026/)
+`data/prompts/owasp_probes.json` — 30 sondes écrites en interne, réparties sur
+10 catégories et alignées sur l'[OWASP GenAI LLM Top 10 2026](https://genai.owasp.org/resource/owasp-genai-llm-top-10-2026/).
+Ce n'est pas un jeu de sondes officiel OWASP.
 (édition en vigueur, publiée 2026-08-04) :
 
 | ID | Catégorie | Poids RSI |

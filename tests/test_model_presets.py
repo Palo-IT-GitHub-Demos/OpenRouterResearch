@@ -12,6 +12,9 @@ class TestModelPresets:
         for name, preset in MODEL_PRESETS.items():
             assert len(preset.models) >= 2, f"preset '{name}' should compare at least 2 models"
 
+    def test_free_general_stays_within_basic_free_request_quota(self) -> None:
+        assert len(MODEL_PRESETS["free_general"].models) == 2
+
     def test_every_model_id_contains_a_vendor_separator(self) -> None:
         # Every real OpenRouter model ID is "vendor/model-name[:variant]" — this
         # is also the heuristic resolve_models_arg relies on to detect a preset
@@ -23,6 +26,13 @@ class TestModelPresets:
     def test_every_preset_has_a_non_empty_description(self) -> None:
         for preset in MODEL_PRESETS.values():
             assert preset.description.strip()
+
+    def test_budget_paid_preset_contains_no_free_tier_models(self) -> None:
+        budget_models = MODEL_PRESETS["budget_paid"].models
+
+        assert budget_models
+        assert all(not model.endswith(":free") for model in budget_models)
+        assert "mistralai/mistral-small-3.1-24b-instruct" in budget_models
 
 
 class TestResolveModelsArg:

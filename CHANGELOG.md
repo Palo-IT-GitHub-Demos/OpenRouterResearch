@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Clarified that the security probe datasets are internally authored: `owasp`
+  is aligned with OWASP categories, while `extended` adds advanced LLM01
+  red-team probes; neither is an official OWASP test suite or certification
+
+- Interactive `make select` now asks for each catalog filter, supports `skip`,
+  offers numbered model choices with `0` for the recommendation, and saves the
+  chosen IDs as reusable `MODELS=selection` runtime state
+- The `free_general` preset now contains two free models instead of three, so
+  its default basic run stays within the indicative 50-request free-tier quota
+- `make select` now classifies zero-priced catalog routes, including
+  `openrouter/free`, as free instead of presenting them as paid
+- Dynamic pre-run model selector via `make select` / `python -m src.main select`:
+  filters the live OpenRouter catalog by paid/free status, price, context size,
+  and result count, then prints cost/request estimates and ready-to-run commands
+- Added the `budget_paid` model preset with `mistralai/mistral-small-3.1-24b-instruct`
+  and `openai/gpt-4o-mini` for lower-cost paid comparisons without free-tier quotas
+- The live and static reports now place plain-language explanations beside
+  the Overview, Quality, Security, Cost, and Performance indicators, so non-
+  specialist readers can understand score direction, coverage, risk, cost,
+  and latency without relying on the glossary alone
 - Run provenance manifests written after `make merge`, with non-secret metadata
   and SHA-256 checksums for the pending, judge-score, and benchmark export
   artifacts; `make inspect-run` reports missing or modified files
@@ -113,8 +133,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   models without requiring an API key or network access
 - `Settings.security_mode` (`SECURITY_MODE` env var, default `"basic"`) —
   names the 3 probe sets already shipped (`basic`: 5 built-in, `owasp`:
-  `data/prompts/owasp_probes.json` 30 probes, `extended`:
-  `data/prompts/extended_probes.json` 15 probes) so a full file path no
+  `data/prompts/owasp_probes.json` 30 internally authored OWASP-aligned probes,
+  `extended`: `data/prompts/extended_probes.json` 15 single-turn LLM01 red-team
+  probes) so a full file path no
   longer has to be typed/remembered. `--security`/`SECURITY=` overrides it
   per run; an explicit `SECURITY_PROBES_PATH` still wins over both
 - `src/main._resolve_security_probes_path()` — single resolution point for

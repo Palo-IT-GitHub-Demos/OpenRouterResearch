@@ -36,7 +36,7 @@ recommendation.
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
 | **Quality**  | Versioned generic screen: deterministic contracts + blind LLM-as-a-Judge for open prompts                                                                                                           | Macro-average 1–5 by dimension, coverage and stability |
 | **Cost**     | Live price projection + OpenRouter`response.usage.cost` ledger                                                                                                                                    | TCO monthly + actual credits per call                   |
-| **Security** | 5 built-in prompt-injection probes, or a named`SECURITY_MODE` (`owasp`: 30 probes / OWASP GenAI LLM Top 10 2026, `extended`: 15 advanced jailbreak probes) + Zero Data Retention policy check | Leak count / RSI / ZDR flag                             |
+| **Security** | 5 built-in prompt-injection probes, or a named `SECURITY_MODE` (`owasp`: 30 internally authored probes aligned with the 10 OWASP GenAI LLM Top 10 2026 categories, `extended`: 15 advanced LLM01 red-team probes) + Zero Data Retention policy check | Leak count / RSI / ZDR flag                             |
 
 ---
 
@@ -65,7 +65,7 @@ dashboard/
 data/prompts/
 ├── quality_prompts.json       # Generic screening prompts (JSON, code, reasoning…)
 ├── security_prompts.json      # 5 baseline injection probes
-└── extended_probes.json       # 15 advanced red-team probes (JailbreakBench-style)
+└── extended_probes.json       # 15 advanced LLM01 red-team probes (JailbreakBench-style)
 
 results/                       # Auto-generated CSV + JSON exports (timestamped)
 docs/
@@ -154,10 +154,43 @@ make verify MODELS=paid_flagship     # $0 — check a preset against the live ca
 make collect MODELS=paid_flagship SECURITY=owasp
 ```
 
+The `free_general` preset intentionally contains two free models. With the
+default basic security set, that is about 42 requests, within the indicative
+50-request free-tier quota. Use `make select FREE_ONLY=1 LIMIT=1` when you want
+one recommended free model.
+
+For a current, price-aware selection without typing model IDs manually, use
+the dynamic selector. It only reads the OpenRouter catalog and prints ready-to-
+copy commands; it does not start a benchmark:
+
+```bash
+make select PAID_ONLY=1 LIMIT=4 MAX_OUTPUT_PRICE=3 MIN_CONTEXT=32000
+```
+
+The selector displays the selected models, current input/output prices,
+context length, estimated monthly cost, and estimated request count. Run the
+printed `make verify` command before the printed `make collect` command.
+
+When run from a terminal, `make select` asks for the model type, maximum input
+and output prices per 1M tokens, minimum context length, and maximum number of
+models. Enter `skip` to keep the default for any filter. The resulting
+numbered list accepts `0` (the recommended cheapest match) or comma-separated
+numbers such as `1,3`. The chosen IDs are saved locally as `selection`, so the
+next commands can use the same selection without copying model names:
+
+```bash
+make verify MODELS=selection
+make collect MODELS=selection
+```
+
+The saved selection is local runtime state under `data/intermediate/` and is
+ignored by Git. Run `make select` again whenever you want to replace it.
+
 `SECURITY=` picks the probe set for that run only: `basic` (5 built-in probes,
-default), `owasp` (30 probes / OWASP GenAI LLM Top 10 2026 — required for the
-dashboard's RSI/heatmap), or `extended` (15 advanced jailbreak/obfuscation
-probes). The Streamlit dashboard's **"Plan a new run"** panel does the same
+default), `owasp` (30 internally authored probes aligned with the OWASP GenAI
+LLM Top 10 2026 categories — required for the dashboard's RSI/heatmap), or
+`extended` (15 advanced LLM01 red-team probes). These are not official OWASP
+probe files or an OWASP certification. The Streamlit dashboard's **"Plan a new run"** panel does the same
 picking visually and prints the ready-to-run command.
 
 ### 4. Verify before spending anything
@@ -259,7 +292,7 @@ All settings are loaded from environment variables (`.env`).
 | `REQUEST_TIMEOUT`         | `60.0`                         | Per-request HTTP timeout, in seconds                                                                                                                                              |
 | `MAX_RETRIES`             | `3`                            | Retry attempts on HTTP 429/5xx, with exponential back-off                                                                                                                        |
 | `MLFLOW_TRACKING_URI`     | `sqlite:///mlruns.db`          | MLflow tracking database (SQLite)                                                                                                                                                  |
-| `SECURITY_MODE`           | `basic`                        | Named probe set:`basic` (5 built-in), `owasp` (30 probes, OWASP GenAI LLM Top 10 2026), `extended` (15 advanced probes). Also settable per run: `--security`/`SECURITY=` |
+| `SECURITY_MODE`           | `basic`                        | Internal probe set: `basic` (5 built-in), `owasp` (30 probes aligned with the 10 OWASP GenAI LLM Top 10 2026 categories), `extended` (15 advanced single-turn LLM01 red-team probes). Also settable per run: `--security`/`SECURITY=` |
 | `SECURITY_PROBES_PATH`    | —                               | Path to a custom probe JSON file (overrides`SECURITY_MODE` above)                                                                                                                |
 | `MAX_SECURITY_PROBE_ERROR_RATE` | `0.15`                    | Abort a run when security-probe transport failures exceed this ratio                                                                                                             |
 | `QUALITY_REPETITIONS`     | `1`                            | Repeats per generic quality prompt; use`2`–`5` only for shortlist stability checks                                                                                            |

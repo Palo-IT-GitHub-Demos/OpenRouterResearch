@@ -1,4 +1,4 @@
-.PHONY: help install dev test test-cov lint fmt type-check docs-build docs-serve run collect judge merge dashboard verify dry-run inspect-run export-gen-e2 export-html verify-quality models
+.PHONY: help install dev test test-cov lint fmt type-check docs-build docs-serve run collect judge merge dashboard verify dry-run inspect-run select export-gen-e2 export-html verify-quality models
 
 PYTHON ?= .venv/bin/python
 
@@ -57,6 +57,13 @@ dry-run: ## Fully offline simulation of the whole pipeline — NO OpenRouter cal
 
 inspect-run: ## Verify the latest run manifest and artifact checksums
 	$(PYTHON) -m src.main inspect-run
+
+select: ## Preview dynamic OpenRouter model selection without starting a benchmark
+	$(PYTHON) -m src.main select \
+		$(if $(PAID_ONLY),--paid-only) $(if $(FREE_ONLY),--free-only) \
+		$(if $(MAX_INPUT_PRICE),--max-input-price $(MAX_INPUT_PRICE)) \
+		$(if $(MAX_OUTPUT_PRICE),--max-output-price $(MAX_OUTPUT_PRICE)) \
+		$(if $(MIN_CONTEXT),--min-context $(MIN_CONTEXT)) $(if $(LIMIT),--limit $(LIMIT))
 
 judge: ## Phase 2 — open a Copilot judge agent (pick one of the 3 providers)
 	@echo "Option A — coordinator (recommended): runs all 3 judges automatically"

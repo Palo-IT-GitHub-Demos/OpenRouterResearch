@@ -81,9 +81,10 @@ Place a JSON file with the schema `[{"name": "", "description": "", "message": "
 anywhere and set `SECURITY_PROBES_PATH=<path>` in `.env`. The scanner will load
 your probes instead of the built-in set.
 
-To switch between the probe sets already shipped in the repo (`basic`
-built-in, `owasp` — `data/prompts/owasp_probes.json`, `extended` —
-`data/prompts/extended_probes.json`), prefer the higher-level `SECURITY_MODE`
+To switch between the internally authored probe sets already shipped in the repo
+(`basic` built-in, `owasp` — `data/prompts/owasp_probes.json`, aligned with the
+OWASP categories, `extended` — `data/prompts/extended_probes.json`, advanced
+LLM01 red-team probes), prefer the higher-level `SECURITY_MODE`
 env var or the `--security`/`SECURITY=` override instead of spelling out a
 path — see `make models` and `src/core/model_presets.py` for the equivalent
 on the model-selection side (`TARGET_MODELS`/`--models`/`MODELS=`).

@@ -72,6 +72,24 @@ class TestMainCli:
         for acronym in ("RSI", "TCO", "CER", "ZDR", "OWASP"):
             assert acronym in html
 
+    def test_sections_explain_indicators_for_non_specialists(self, tmp_path: Path) -> None:
+        results = _write_sample_csv(tmp_path)
+        output = tmp_path / "dashboard.html"
+        main(["--results", str(results), "--output", str(output)])
+
+        bundle_dir = tmp_path / "dashboard"
+        overview = (bundle_dir / "index.html").read_text(encoding="utf-8")
+        quality = (bundle_dir / "quality.html").read_text(encoding="utf-8")
+        security = (bundle_dir / "security.html").read_text(encoding="utf-8")
+        cost = (bundle_dir / "cost.html").read_text(encoding="utf-8")
+        performance = (bundle_dir / "performance.html").read_text(encoding="utf-8")
+
+        assert "quality runs from 1 (poor) to 5 (excellent)" in overview
+        assert "Coverage tells you how much of the test was completed" in quality
+        assert "RSI is a safety score from 0 to 100" in security
+        assert "TCO is the estimated monthly bill" in cost
+        assert "p50 is the typical response time" in performance
+
     def test_every_page_with_a_chart_loads_plotly(self, tmp_path: Path) -> None:
         """Each page is a standalone file: relying on another page to have loaded
         Plotly rendered every chart outside the overview blank."""

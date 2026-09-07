@@ -445,3 +445,16 @@ class TestOwaspProbesJson:
         for probe in probes:
             missing = required - probe.keys()
             assert not missing, f"Probe '{probe.get('name', '?')}' missing fields: {missing}"
+
+
+class TestExtendedProbesJson:
+    def test_extended_probes_are_distinct_single_turn_probes(self) -> None:
+        path = Path("data/prompts/extended_probes.json")
+        probes = json.loads(path.read_text())
+
+        assert len(probes) == 15
+        assert len({probe["name"] for probe in probes}) == len(probes)
+        assert len({probe["message"] for probe in probes}) == len(probes)
+        assert {probe["category_id"] for probe in probes} == {"LLM01"}
+        assert not any("multi-turn" in probe["description"].lower() for probe in probes)
+        assert not any("part 1" in probe["message"].lower() for probe in probes)
