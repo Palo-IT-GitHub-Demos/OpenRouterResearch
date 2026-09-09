@@ -66,6 +66,11 @@ class CallCostRecord:
     retry back-off waits. Kept for backward compatibility with existing exports.
     """
     network_latency_ms: float
+    run_id: str | None = None
+    scenario_id: str | None = None
+    probe_id: str | None = None
+    case_id: str | None = None
+    turn_index: int | None = None
     """Time spent on the actual request/response round-trip of the attempt that
     succeeded — excludes semaphore queueing and retry back-off waits. This is the
     field that reflects model/provider response time; see docs/quality-methodology.md
@@ -134,6 +139,11 @@ def _build_call_cost_record(
     usage_context: str,
     latency_ms: float,
     network_latency_ms: float,
+    run_id: str | None = None,
+    scenario_id: str | None = None,
+    probe_id: str | None = None,
+    case_id: str | None = None,
+    turn_index: int | None = None,
 ) -> CallCostRecord:
     """Build a record from OpenRouter's completion response and usage object."""
     usage = _response_value(completion, "usage")
@@ -153,6 +163,11 @@ def _build_call_cost_record(
         cost_source="openrouter_usage" if actual_cost_credits is not None else "unavailable",
         latency_ms=round(latency_ms, 3),
         network_latency_ms=round(network_latency_ms, 3),
+        run_id=run_id,
+        scenario_id=scenario_id,
+        probe_id=probe_id,
+        case_id=case_id,
+        turn_index=turn_index,
     )
 
 
@@ -177,6 +192,11 @@ class _CallCostLedger:
         usage_context: str,
         started_at: float,
         network_started_at: float | None = None,
+        run_id: str | None = None,
+        scenario_id: str | None = None,
+        probe_id: str | None = None,
+        case_id: str | None = None,
+        turn_index: int | None = None,
     ) -> None:
         now = perf_counter()
         record = _build_call_cost_record(
@@ -185,6 +205,11 @@ class _CallCostLedger:
             usage_context=usage_context,
             latency_ms=(now - started_at) * 1_000,
             network_latency_ms=(now - (network_started_at if network_started_at is not None else started_at)) * 1_000,
+            run_id=run_id,
+            scenario_id=scenario_id,
+            probe_id=probe_id,
+            case_id=case_id,
+            turn_index=turn_index,
         )
         with self._call_costs_lock:
             self._call_costs.append(record)
@@ -220,6 +245,11 @@ class OpenRouterClient(_CallCostLedger):
         model: str,
         messages: list[dict[str, str]],
         usage_context: str = "unclassified",
+        run_id: str | None = None,
+        scenario_id: str | None = None,
+        probe_id: str | None = None,
+        case_id: str | None = None,
+        turn_index: int | None = None,
         **kwargs: Any,
     ) -> ChatCompletion:
         """Send a completion and record OpenRouter's actual response cost."""
@@ -247,6 +277,11 @@ class OpenRouterClient(_CallCostLedger):
                 requested_model=model,
                 usage_context=usage_context,
                 started_at=started_at,
+                run_id=run_id,
+                scenario_id=scenario_id,
+                probe_id=probe_id,
+                case_id=case_id,
+                turn_index=turn_index,
             )
             return completion
         except openai.APIStatusError as exc:
@@ -339,6 +374,11 @@ class AsyncOpenRouterClient(_CallCostLedger):
         model: str,
         messages: list[dict[str, str]],
         usage_context: str = "unclassified",
+        run_id: str | None = None,
+        scenario_id: str | None = None,
+        probe_id: str | None = None,
+        case_id: str | None = None,
+        turn_index: int | None = None,
         **kwargs: Any,
     ) -> ChatCompletion:
         """Send an async chat completion request with automatic retries.
@@ -374,6 +414,11 @@ class AsyncOpenRouterClient(_CallCostLedger):
                             usage_context=usage_context,
                             started_at=started_at,
                             network_started_at=network_started_at,
+                            run_id=run_id,
+                            scenario_id=scenario_id,
+                            probe_id=probe_id,
+                            case_id=case_id,
+                            turn_index=turn_index,
                         )
                         return completion
         except openai.APIStatusError as exc:

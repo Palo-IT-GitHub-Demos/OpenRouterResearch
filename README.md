@@ -1,42 +1,45 @@
-# llm-model-screening — LLM Evaluation Pipeline (LLMOps)
+# Model Compass — LLM decision-support pipeline
 
-> Automated, scalable screening of large language models available on
+> Evidence-based, reproducible evaluation of large language models available on
 > [OpenRouter](https://openrouter.ai/) across three critical axes: **Quality**,
-> **Cost**, and **Security**.
+> **Security**, **Cost**, and **Performance**.
 >
-> Built at **Palo IT Singapore** to guide architecture choices for enterprise clients.
+> Built at **Palo IT Singapore** to support technical model selection for enterprise calls for tender.
 
 ---
 
 ## Overview
 
-This pipeline screens LLMs available through the OpenRouter API aggregator and
-produces a comparison matrix for building a shortlist. Results are exported as
-CSV/JSON and visualised in a local Streamlit dashboard with a **Pareto
-frontier** overlay (best quality-to-cost trade-off).
+Model Compass evaluates all selected models through the OpenRouter API and
+produces a comparison matrix plus a versioned recommendation report by generic
+enterprise use case. Results are exported as CSV/JSON and visualised in a local
+Streamlit dashboard and a static HTML report.
 
-It is a cross-provider screening tool, not a business benchmark. It measures
-generic quality fundamentals together with cost, latency and security to reduce
-the number of models to evaluate in the sister project
-[`gen-e2-eval`](https://github.com/GLOBAL-PALO-IT/gen-e2-eval).
+It is a cross-provider technical decision-support tool, not an automatic tender
+analyser or procurement system. It measures generic quality fundamentals,
+security, model-only cost and performance. A human who knows the tender uses the
+report to select one or more models for the relevant context.
 
 ### Scope boundary
 
-LLM Model Screening answers: **"Which models are worth evaluating further?"**
+Model Compass answers: **"Which models are technically relevant for each
+generic enterprise use case?"**
 
-It does not answer: **"Which model is best for this specific business
-workflow?"** That decision belongs to `gen-e2-eval`, using client-specific
-tasks, reference data and functional evaluation. A result from this repository
-must therefore be treated as a shortlist signal, never as a final adoption
-recommendation.
+It does not answer: **"Which model must be adopted for this specific client?"**
+The report does not ingest a tender, client criteria or client dataset. The
+final choice remains with the human who knows the call for tender. Use
+[`docs/model-compass-scope.md`](docs/model-compass-scope.md) for the complete
+decision contract and boundaries.
 
 ### Evaluation axes
 
 | Axis               | Method                                                                                                                                                                                              | Key metric                                              |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| **Quality**  | Versioned generic screen: deterministic contracts + blind LLM-as-a-Judge for open prompts                                                                                                           | Macro-average 1–5 by dimension, coverage and stability |
-| **Cost**     | Live price projection + OpenRouter`response.usage.cost` ledger                                                                                                                                    | TCO monthly + actual credits per call                   |
-| **Security** | 5 built-in prompt-injection probes, or a named `SECURITY_MODE` (`owasp`: 30 internally authored probes aligned with the 10 OWASP GenAI LLM Top 10 2026 categories, `extended`: 15 advanced LLM01 red-team probes) + Zero Data Retention policy check | Leak count / RSI / ZDR flag                             |
+| **Quality** | Versioned generic prompts with deterministic contracts and blind LLM-as-a-Judge scoring | Score 1–5 by use case, coverage and stability |
+| **Security** | Internal prompt-injection probes aligned with selected OWASP categories + Zero Data Retention policy check | Leak count / RSI / ZDR flag |
+| **Cost** | Live OpenRouter pricing and actual usage ledger | Model-only TCO + actual credits per call |
+| **Performance** | Network latency and completion throughput captured after semaphore acquisition | P50/P95 latency + tokens/second |
+| **Recommendation** | Versioned use-case catalog, quality thresholds and configurable weights | Ranked eligible models and one or more tied recommendations |
 
 ---
 
@@ -53,7 +56,8 @@ src/
 │   ├── deterministic_eval.py  # JSON / Python syntax checks (no LLM call needed)
 │   ├── cost_analyzer.py       # Pricing fetch + pandas cost matrix
 │   ├── quality_judge.py       # Deterministic pre-eval + response collection (LLM judging is external)
-│   └── security_scanner.py    # Injection probes + ZDR policy check
+│   ├── security_scanner.py    # Injection probes + ZDR policy check
+│   └── recommendation.py      # Model Compass use-case ranking and evidence statuses
 ├── observability/
 │   └── tracker.py             # MLflow experiment tracker
 └── main.py                    # CollectPipeline / MergePipeline / DryRunPipeline orchestrators (CLI)
@@ -66,6 +70,9 @@ data/prompts/
 ├── quality_prompts.json       # Generic screening prompts (JSON, code, reasoning…)
 ├── security_prompts.json      # 5 baseline injection probes
 └── extended_probes.json       # 15 advanced LLM01 red-team probes (JailbreakBench-style)
+
+data/catalog/
+└── model_compass_use_cases.json # Versioned generic use cases, prompt mapping and thresholds
 
 results/                       # Auto-generated CSV + JSON exports (timestamped)
 docs/
@@ -93,7 +100,11 @@ docs/
 - **Generic quality screen** — versioned, provider-neutral prompts test structured output, code
   contracts, factual sanity, elementary reasoning, instruction reliability and concise communication.
   The aggregate is macro-averaged by dimension; coverage and optional repeat-run stability are exported
-  alongside the score. This is a broad shortlist signal, not a replacement for a use-case evaluation.
+  alongside the score. The Model Compass catalog maps these prompts to generic use cases and applies
+  a per-use-case quality threshold before ranking models.
+- **Model Compass recommendation layer** — every model remains visible for every catalog use case;
+  quality eligibility is evaluated first, then quality, security, model-only cost and performance are
+  combined with configurable weights. Equal scores remain tied and the final choice stays human.
 - **MLflow** — local SQLite tracking (`sqlite:///mlruns.db`) by default, no external service required
 - **Actual call-cost ledger** — every successful OpenRouter completion records the provider-returned
   `usage.cost`, token usage, resolved model, latency and evaluation stage. The raw ledger contains no
@@ -110,7 +121,7 @@ docs/
 > make dry-run && make verify        # both $0 — catch config/key/model mistakes first
 > make collect MODELS=free_general SECURITY=basic   # paid step (free models here: $0)
 > # then, in VS Code Copilot chat:  @judge-coordinator
-> make merge && make export-html     # writes results/dashboard_<timestamp>.html
+> make merge && make export-html     # benchmark + recommendations + dashboard
 > ```
 
 ### 1. Prerequisites
@@ -122,7 +133,7 @@ docs/
 
 ```bash
 git clone <repo>
-cd llm-model-screening
+cd model-compass
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e ".[dev,docs]"
@@ -192,24 +203,30 @@ ignored by Git. Run `make select` again whenever you want to replace it.
 `SECURITY=` picks the probe set for that run only: `basic` (5 built-in probes,
 default), `owasp` (30 internally authored probes aligned with the OWASP GenAI
 LLM Top 10 2026 categories — required for the dashboard's RSI/heatmap), or
-`extended` (15 advanced LLM01 red-team probes). These are not official OWASP
-probe files or an OWASP certification. The profiles serve different purposes:
+`extended` (advanced LLM01 red-team probes, including bounded multi-turn
+scenarios). These are not official OWASP probe files or an OWASP certification.
+The profiles serve different purposes:
 
 | Profile | Scope | Recommended use |
 | --- | --- | --- |
 | `basic` | 5 built-in, single-turn injection probes | Fast smoke test and low-cost screening |
 | `owasp` | 30 internal probes aligned with 10 OWASP categories, 3 per category | Broad, repeatable security baseline and heatmap |
-| `extended` | 15 internal, single-turn red-team probes focused on `LLM01` | Stress test for advanced prompt-injection variants |
+| `extended` | Advanced internal red-team probes focused on `LLM01`, including bounded multi-turn scenarios | Stress test for advanced prompt-injection variants |
 
 `extended` is not a broader OWASP taxonomy: it deepens `LLM01` with techniques
-such as encoding, Unicode smuggling, jailbreak framing, typoglycemia and
-few-shot authority spoofing. It does not test multi-turn attacks. Do not
-compare its RSI directly with an `owasp` RSI; compare runs only when their
-scored category set and probe profile/version are the same. The Streamlit
-dashboard's **"Plan a new run"** panel exposes the same profiles visually and
-prints the ready-to-run command.
+such as encoding, Unicode smuggling, jailbreak framing, typoglycemia, few-shot
+authority spoofing and bounded multi-turn escalation (see
+[`docs/multiprobe-system.md`](docs/multiprobe-system.md) for the scenario
+contract). Do not compare its RSI directly with an `owasp` RSI; compare runs
+only when their scored category set and probe profile/version are the same.
+The Streamlit dashboard's **"Plan a new run"** panel exposes the same profiles
+visually and prints the ready-to-run command.
 
 ### 4. Verify before spending anything
+
+The `SECURITY=extended` profile runs bounded sequential prompt-injection
+scenarios alongside its mono-turn probes. It keeps the canary across turns and
+reports trajectory outcomes separately within the extended suite.
 
 Two preflight checks, both **$0**, run in this order before a paid `make collect`:
 
@@ -314,6 +331,7 @@ All settings are loaded from environment variables (`.env`).
 | `QUALITY_REPETITIONS`     | `1`                            | Repeats per generic quality prompt; use`2`–`5` only for shortlist stability checks                                                                                            |
 | `MAX_QUALITY_COLLECTION_ERROR_RATE` | `0.15`                | Abort a run when quality-collection transport failures exceed this ratio                                                                                                         |
 | `WORKLOAD_PROFILE`        | `enterprise_qa`                | TCO/CER workload profile: `enterprise_qa` \| `code_assistant` \| `document_analysis` \| `chatbot_high_volume`                                                              |
+| `MODEL_COMPASS_WEIGHTS`   | catalog defaults               | Optional JSON override for quality/security/cost/performance weights; values must sum to `1.0`                                                                                  |
 
 > **Note:** `JUDGE_MODEL` no longer exists. Quality judging for undecidable
 > responses is done by 3 GitHub Copilot agents (`@judge-anthropic`,
@@ -322,9 +340,10 @@ All settings are loaded from environment variables (`.env`).
 
 ### Interpreting the quality result
 
-`avg_quality_score` is a **generic pre-selection score**, not a claim that a model is best for a
+`avg_quality_score` is a **generic quality component**, not a claim that a model is best for a
 specific client workflow. It is macro-averaged across the six quality dimensions so that a large
-number of easy formatting prompts cannot dominate the result. Read it together with:
+number of easy formatting prompts cannot dominate the result. Model Compass then evaluates the
+score per catalog use case before producing a recommendation. Read it together with:
 
 - `quality_coverage_rate` — fraction of configured prompts successfully scored;
 - `quality_dimension_coverage_rate` — fraction of quality dimensions represented in the score;
@@ -340,11 +359,15 @@ For objective checks, `verification_status` in the evidence detail distinguishes
   OpenRouter recheck associated with the benchmark.
 
 Recheck reports are sidecar evidence under `results/verification/`. They are shown in Streamlit
-and `evidence.html`, but never rewrite the original benchmark score. For shortlist decisions,
+and `evidence.html`, but never rewrite the original benchmark score. For recommendation decisions,
 prefer `QUALITY_REPETITIONS>=2`; the optional recheck mainly exists for diagnosing a `k=1` run.
 
 The cost-efficiency ratio (`cer`) is withheld when the result does not cover the required dimensions.
-Use `gen-e2-eval` after this filter to measure success against a client-specific golden dataset.
+Model Compass recommendation rows are exported under `results/recommendations/` and include the
+use-case threshold, quality eligibility, weighted decision score, rank and missing evidence. Set
+`MODEL_COMPASS_WEIGHTS` to override the default `50/25/20/5` weights without changing the code.
+Use `gen-e2-eval` when a client-specific golden dataset is available and a domain acceptance decision
+is required.
 See [docs/quality-methodology.md](docs/quality-methodology.md) for prompt provenance, coverage
 limits, the validation protocol and the comparison procedure with `gen-e2-eval`.
 

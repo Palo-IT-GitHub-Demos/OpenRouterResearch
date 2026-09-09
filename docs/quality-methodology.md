@@ -5,15 +5,20 @@ comprise, validée et utilisée dans ce projet.
 
 ## 1. Objectif
 
-La suite de qualité est un outil de **screening générique** pour réduire une
-liste de modèles OpenRouter à une shortlist avant une évaluation métier.
+La suite de qualité est un outil de **mesure générique** utilisé par Model
+Compass pour comparer les modèles par cas d'usage standardisés.
 
-Elle ne remplace pas une évaluation fonctionnelle dans
+Elle ne remplace pas une évaluation fonctionnelle client dans
 [gen-e2-eval](https://github.com/GLOBAL-PALO-IT/gen-e2-eval). Son rôle est de
-répondre à la question :
+fournir le composant qualité d'une recommandation technique et de répondre à la
+question :
 
-> « Quels modèles sont suffisamment solides sur les capacités fondamentales pour
-> mériter une évaluation plus approfondie ? »
+> « Quels modèles franchissent le seuil de qualité d'un cas d'usage générique ? »
+
+Le catalogue qui relie les prompts aux cas d'usage et fixe les seuils se trouve
+dans `data/catalog/model_compass_use_cases.json`.
+Les seuils de cette version sont provisoires : ils doivent être recalibrés après
+la définition des critères de réussite et de la difficulté de chaque tâche.
 
 ## 2. Origine et mode de correction des prompts
 
@@ -21,12 +26,12 @@ Les 16 prompts sont **rédigés en interne par l'équipe du projet** ; ils ne
 proviennent pas d'un jeu de données de benchmark public. Chacun est rattaché à
 exactement une dimension (`quality_dimension`) et une catégorie (`category`)
 définies dans
-[data/prompts/quality_prompts.json](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/data/prompts/quality_prompts.json).
+[data/prompts/quality_prompts.json](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/data/prompts/quality_prompts.json).
 
 La catégorie détermine le mode de correction :
 
 - si la catégorie est enregistrée dans `CHECKS`
-  ([deterministic_eval.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/evaluators/deterministic_eval.py)),
+  ([deterministic_eval.py](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/src/evaluators/deterministic_eval.py)),
   la réponse est corrigée en Python pur (JSON, syntaxe, réponse exacte), sans
   aucun appel à un modèle ;
 - sinon (`generic_judgment`), le prompt doit fournir des `judge_criteria`
@@ -229,7 +234,7 @@ Le module de correction déterministe résume lui-même sa limite :
 > « The screen deliberately measures only provider-neutral fundamentals:
 > structured output, factual sanity, elementary reasoning and instruction
 > reliability. It is not a substitute for domain-specific task evaluation. »
-> — [deterministic_eval.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/evaluators/deterministic_eval.py)
+> — [deterministic_eval.py](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/src/evaluators/deterministic_eval.py)
 
 | Capacité | État |
 | --- | --- |
@@ -328,7 +333,27 @@ Les rapports sous `results/verification/` sont des preuves secondaires : les
 dashboards les associent au benchmark, mais ils ne modifient ni la réponse ni
 la note du run historique.
 
-## 6. Comparaison avec gen-e2-eval
+## 6. Éligibilité Model Compass et comparaison avec gen-e2-eval
+
+Pour chaque cas d'usage du catalogue, les prompts associés sont agrégés par
+modèle. Un modèle est qualité-éligible lorsque sa couverture est complète et
+que sa moyenne atteint le seuil du cas d'usage. Le score qualité n'est jamais
+abaissé artificiellement pour compenser un coût ou une latence favorable.
+
+Les modèles éligibles sont ensuite classés dans
+`results/recommendations/` avec les composantes suivantes :
+
+- qualité du cas d'usage : 50 % par défaut ;
+- RSI de sécurité générique : 25 % ;
+- score de coût du modèle seul : 20 % ;
+- score de performance : 5 %.
+
+Les poids peuvent être remplacés par `MODEL_COMPASS_WEIGHTS`, mais les poids
+effectifs et la version du catalogue sont toujours écrits dans le rapport. Une
+preuve manquante produit un statut explicite et aucun rang, plutôt qu'une
+valeur de remplacement optimiste. Les scores égaux restent ex æquo.
+
+## 7. Comparaison avec gen-e2-eval
 
 Le score qualité de ce projet et la validation métier de `gen-e2-eval` ne sont
 pas directement comparables, car ils ne mesurent pas le même objet.
@@ -338,7 +363,7 @@ modèles pertinents**.
 
 ### Protocole recommandé
 
-1. exécuter la suite LLM Model Screening sur les mêmes modèles ;
+1. exécuter Model Compass sur les mêmes modèles ;
 2. exécuter `gen-e2-eval` sur les mêmes modèles ;
 3. comparer le top 3 et les classements globaux ;
 4. noter les désaccords et les raisons possibles ;
@@ -347,7 +372,7 @@ modèles pertinents**.
 Le template est dans
 [quality-validation/gen-e2-eval-comparison-template.md](quality-validation/gen-e2-eval-comparison-template.md).
 
-## 7. Critères d'acceptation
+## 8. Critères d'acceptation
 
 La suite est considérée comme correctement justifiée si elle remplit au moins
 les règles suivantes :
@@ -362,8 +387,8 @@ les règles suivantes :
   base à une décision d'exclusion ou de shortlist ;
 - la couverture et les limites du périmètre (§4) sont rappelées à côté du
   score dans tout livrable ;
-- le score est toujours interprété comme un signal de shortlist, jamais comme
-  une recommandation finale d'adoption.
+- le score générique et la recommandation par cas d'usage ne sont jamais
+  interprétés comme une décision finale d'adoption.
 
 ## Voir aussi
 
@@ -372,5 +397,5 @@ les règles suivantes :
 - [ADR 0001](adr/0001-architecture-initiale.md) — décisions D9, D10, D12 ;
 - [audit du 2026-08-21](audit-2026-08-21.md) — limites connues, dont
   l'absence de répétitions par défaut ;
-- [README.md](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/README.md)
+- [README.md](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/README.md)
   et [index.md](index.md) — périmètre et positionnement vs `gen-e2-eval`.

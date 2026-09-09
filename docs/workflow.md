@@ -107,6 +107,7 @@ flowchart TD
 | `SECURITY_PROBES_PATH` | Fichier de sondes custom (optionnel, prioritaire sur `SECURITY_MODE`) | — |
 | `QUALITY_REPETITIONS` | Répétitions de chaque prompt qualité (1-5) | `1` |
 | `WORKLOAD_PROFILE` | Profil de charge pour le TCO | `enterprise_qa` |
+| `MODEL_COMPASS_WEIGHTS` | JSON optionnel pour remplacer les poids qualité/sécurité/coût/performance | Poids du catalogue |
 
 !!! info "JUDGE_MODEL supprimé"
     Le jugement qualité est assuré par 3 agents GitHub Copilot
@@ -177,6 +178,26 @@ make inspect-run                 # Vérifie le manifeste et les checksums du der
     ```
     Le tableau de bord Streamlit reste principalement une surface d'analyse
     après le run ; son panneau « Plan a new run » est une aide secondaire.
+
+### Fondation multi-probe
+
+Le dépôt prépare un runner réutilisable pour les scénarios de sécurité et, plus
+tard, pour des évaluations qualité conversationnelles. La première implémentation
+est volontairement isolée : elle est testée offline mais n'est pas encore
+appelée par `make collect`. Les profils sécurité actuels restent donc mono-tour
+et leurs scores historiques restent comparables.
+
+Le futur modèle de scénario distinguera :
+
+- un **scénario** : une trajectoire complète avec limites et catégorie ;
+- un **tour** : un message utilisateur et la réponse produite ;
+- une **tentative** : un retry technique du même tour ;
+- un **résultat de trajectoire** : refus sûr, fuite confirmée, résultat
+    inconclusif ou scénario interrompu.
+
+Les limites `max_turns` et `max_total_tokens` sont obligatoires dans le contrat
+expérimental. Elles sont nécessaires pour estimer les quotas gratuits, le coût
+des modèles payants et le pire cas avant toute collecte.
 
 ### Sélection dynamique
 
@@ -251,7 +272,7 @@ Le ledger complet est exporté dans `results/call_costs/`.
 !!! warning "Rôle du score qualité"
     Ce score est un **filtre de présélection**, pas une mesure de performance
     sur vos tâches métier. Utilisez gen-e2-eval pour une évaluation par
-    use-case après la shortlist.
+    use-case après la recommandation générique.
 
 ### Suite de prompts (`data/prompts/quality_prompts.json`)
 
@@ -463,7 +484,7 @@ du modèle (`/api/v1/models`).
 
 ---
 
-## 6. Fusion et export (`MergePipeline`)
+## 6. Fusion, recommandation et export (`MergePipeline`)
 
 **Fichier :** `src/main.py`
 
@@ -472,6 +493,11 @@ du modèle (`/api/v1/models`).
 3. Moyenne les scores multi-juges par `(prompt_id, attempt, model_id)`
 4. Agrège le ledger de coût réel par modèle (`summarize_actual_call_costs`)
 5. Fusionne pricing + sécurité + qualité + coûts réels
+6. Charge le catalogue `data/catalog/model_compass_use_cases.json`
+7. Applique le seuil qualité de chaque cas d'usage, puis calcule le score
+    pondéré Model Compass pour les modèles éligibles
+8. Conserve les égalités et les statuts de preuve manquante sans inventer de
+    score
 
 Les exports de détails sous `results/quality_details/` conservent le modèle,
 le prompt, la réponse, le score agrégé, la source et la justification. Pour les
@@ -486,9 +512,22 @@ base_df (liste des modèles)
   ├─ LEFT JOIN pricing                (prompt_price_per_token, tco_usd, cer)
   └─ LEFT JOIN coûts réels agrégés    (actual_cost_credits, coverage_rate…)
        │
-       └─▶ results/benchmark_{ts}.{csv,json}
-       └─▶ results/call_costs/benchmark_{ts}_call_costs.{csv,json}
+    └─▶ results/benchmark_{ts}.{csv,json}
+             ├─▶ results/recommendations/benchmark_{ts}_recommendations.{csv,json}
+             └─▶ results/call_costs/benchmark_{ts}_call_costs.{csv,json}
 ```
+
+L'artefact de recommandation contient une ligne par couple
+`use_case_id / model`. Il publie notamment `quality_threshold`,
+`quality_eligible`, les composantes normalisées, `recommendation_score`,
+`recommendation_rank`, `recommendation_status` et `evidence_missing`. Le
+benchmark principal reste une ligne par modèle pour préserver la compatibilité
+avec les exports historiques.
+
+Une recommandation n'est produite que lorsque la qualité du cas d'usage est
+complète et que les preuves sécurité, coût et performance sont disponibles.
+Sinon, le modèle reste affiché avec `insufficient_quality_evidence` ou
+`insufficient_decision_evidence`.
 
 ---
 

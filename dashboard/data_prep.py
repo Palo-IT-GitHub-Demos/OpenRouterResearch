@@ -74,6 +74,11 @@ STATUS_STYLES = {
     "Fair": "background-color: #fff3cd; color: #856404",
     "Vulnerable": "background-color: #f8d7da; color: #721c24",
     "Poor": "background-color: #f8d7da; color: #721c24",
+    "recommended": "background-color: #d4edda; color: #155724",
+    "eligible": "background-color: #d1ecf1; color: #0c5460",
+    "below_quality_threshold": "background-color: #f8d7da; color: #721c24",
+    "insufficient_quality_evidence": "background-color: #fff3cd; color: #856404",
+    "insufficient_decision_evidence": "background-color: #fff3cd; color: #856404",
 }
 
 
@@ -349,3 +354,17 @@ def load_quality_details(benchmark_path: Path) -> pd.DataFrame:
         )
         details_df["verification_status"] = resolved_verification.fillna(details_df["verification_status"])
     return details_df
+
+
+def load_recommendations(benchmark_path: Path) -> pd.DataFrame:
+    """Load the Model Compass recommendation artifact beside a benchmark.
+
+    Runs created before the recommendation contract return an empty frame so
+    both dashboards can explain that the artifact is unavailable without
+    breaking historical result browsing.
+    """
+    recommendations_path = benchmark_path.parent / "recommendations" / f"{benchmark_path.stem}_recommendations.csv"
+    if not recommendations_path.exists():
+        return pd.DataFrame()
+    recommendations_df = pd.read_csv(recommendations_path)
+    return recommendations_df if "model" in recommendations_df.columns else pd.DataFrame()

@@ -18,6 +18,7 @@ import streamlit as st
 from dashboard.data_prep import best_row as _best_row
 from dashboard.data_prep import compute_cost_columns, enrich_benchmark
 from dashboard.data_prep import load_quality_details as _load_quality_details
+from dashboard.data_prep import load_recommendations as _load_recommendations
 from dashboard.data_prep import numeric_series as _numeric_series
 from dashboard.data_prep import parse_judge_verdicts as _parse_judge_verdicts
 from dashboard.data_prep import quality_dimension_long_frame as _quality_dimension_long_frame
@@ -53,18 +54,18 @@ _SECURITY_MODE_HELP = {
 }
 
 st.set_page_config(
-    page_title="LLM Model Screening dashboard",
+    page_title="Model Compass dashboard",
     page_icon=":material/analytics:",
     layout="wide",
 )
-st.title("LLM Model Screening dashboard")
-st.caption("Generic pre-selection: quality fundamentals, security posture and monthly cost.")
+st.title("Model Compass dashboard")
+st.caption("Evidence-based LLM selection across generic enterprise use cases.")
 
 with st.expander(":material/help: How to read this dashboard", expanded=False):
     st.markdown(
-        "Every model is screened on **three independent axes**. Treat every score below as a "
-        "pre-selection signal, not a final recommendation — pair it with a domain-specific "
-        "evaluation (`gen-e2-eval`) before deciding.\n"
+        "Every model is screened on quality, security, cost and performance across a stable generic "
+        "use-case catalog. The report is a technical recommendation for a human decision-maker, not "
+        "an automatic procurement decision.\n"
         "\n"
         "**:material/fact_check: Quality (1–5)** — `avg_quality_score` blends two scales that are "
         "*not* interchangeable: deterministic pass/fail checks (scored 1 or 5) and a blind consensus "
@@ -184,9 +185,13 @@ df = df[df["model"].isin(selected_models)].reset_index(drop=True)
 quality_details_df = _load_quality_details(selected_file)
 if not quality_details_df.empty:
     quality_details_df = quality_details_df[quality_details_df["model"].isin(selected_models)]
+recommendations_df = _load_recommendations(selected_file)
+if not recommendations_df.empty:
+    recommendations_df = recommendations_df[recommendations_df["model"].isin(selected_models)]
 
 (
     tab_overview,
+    tab_recommendations,
     tab_quality,
     tab_transcripts,
     tab_security,
@@ -196,6 +201,7 @@ if not quality_details_df.empty:
 ) = st.tabs(
     [
         ":material/insights: Overview",
+        ":material/explore: Model Compass",
         ":material/fact_check: Quality screen",
         ":material/forum: Prompts & responses",
         ":material/security: Security",
@@ -299,6 +305,86 @@ with tab_overview:
                 },
             )
 
+# ── Model Compass recommendations ─────────────────────────────────────────────
+
+with tab_recommendations:
+    st.subheader("Model Compass recommendations")
+    st.caption(
+        "Each model is scored for every generic use case. Quality eligibility is checked first; "
+        "the weighted score ranks only models with complete quality, security, cost and performance evidence."
+    )
+    if recommendations_df.empty:
+        st.info(
+            "No Model Compass recommendation artifact is available for this run. "
+            "Run `make collect`, complete the judge phase, and run `make merge` again."
+        )
+    else:
+        use_case_options = sorted(recommendations_df["use_case_name"].dropna().unique())
+        selected_use_case = st.selectbox("Use case", options=use_case_options)
+        use_case_df = recommendations_df[recommendations_df["use_case_name"] == selected_use_case].copy()
+        recommended_count = int((use_case_df["recommendation_status"] == "recommended").sum())
+        eligible_count = int(use_case_df["quality_eligible"].fillna(False).astype(bool).sum())
+        with st.container(horizontal=True):
+            st.metric("Recommended", recommended_count, border=True)
+            st.metric("Quality-eligible", eligible_count, border=True)
+            threshold = float(use_case_df["quality_threshold"].iloc[0])
+            st.metric("Quality threshold", f"{threshold:.1f} / 5", border=True)
+            catalog_version = str(use_case_df["catalog_version"].iloc[0])
+            st.metric("Catalog", catalog_version, border=True)
+
+        recommendation_columns = [
+            "model",
+            "recommendation_status",
+            "recommendation_rank",
+            "recommendation_score",
+            "quality_score",
+            "quality_coverage_rate",
+            "security_score",
+            "cost_score",
+            "performance_score",
+            "evidence_missing",
+        ]
+        recommendation_display = use_case_df[
+            [column for column in recommendation_columns if column in use_case_df.columns]
+        ].sort_values(["recommendation_status", "recommendation_rank"], na_position="last")
+        st.dataframe(
+            recommendation_display.style.map(_tint_status, subset=["recommendation_status"]),
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "recommendation_status": st.column_config.TextColumn(
+                    "Status",
+                    help=(
+                        "recommended = highest weighted score; eligible = above the quality threshold; "
+                        "other statuses explain why a model cannot be recommended."
+                    ),
+                ),
+                "recommendation_rank": st.column_config.NumberColumn("Rank", format="%d"),
+                "recommendation_score": st.column_config.ProgressColumn(
+                    "Decision score", format="%.1f / 100", min_value=0, max_value=100
+                ),
+                "quality_score": st.column_config.ProgressColumn(
+                    "Use-case quality", format="%.2f / 5", min_value=0, max_value=5
+                ),
+                "quality_coverage_rate": st.column_config.NumberColumn("Quality coverage", format="percent"),
+                "security_score": st.column_config.ProgressColumn(
+                    "Security component", format="%.1f", min_value=0, max_value=100
+                ),
+                "cost_score": st.column_config.ProgressColumn(
+                    "Cost component", format="%.1f", min_value=0, max_value=100
+                ),
+                "performance_score": st.column_config.ProgressColumn(
+                    "Performance component", format="%.1f", min_value=0, max_value=100
+                ),
+            },
+        )
+        st.download_button(
+            "Download Model Compass recommendations",
+            data=use_case_df.to_csv(index=False).encode(),
+            file_name="model_compass_recommendations.csv",
+            mime="text/csv",
+        )
+
 # ── Quality screen ────────────────────────────────────────────────────────────
 
 with tab_quality:
@@ -310,7 +396,7 @@ with tab_quality:
     )
     st.info(
         "This is a broad pre-selection signal, not a domain recommendation. "
-        "Use gen-e2-eval for task-specific acceptance testing after shortlisting."
+        "Use gen-e2-eval for task-specific acceptance testing after this generic recommendation."
     )
 
     suite_ids = df.get("quality_suite_id", pd.Series(dtype="string")).dropna().unique()
@@ -351,7 +437,7 @@ with tab_quality:
         )
 
     if "quality_stability_score" not in df.columns or stability.notna().sum() == 0:
-        st.caption("Stability is not measured in this run. Set `QUALITY_REPETITIONS=2` or higher for a shortlist.")
+        st.caption("Stability is not measured in this run. Set `QUALITY_REPETITIONS=2` or higher for a recommendation.")
 
     if not quality_details_df.empty and "verification_status" in quality_details_df.columns:
         verification_counts = quality_details_df["verification_status"].value_counts()

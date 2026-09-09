@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Repositioned the project as **Model Compass**, with a versioned generic
+  use-case catalog and deterministic recommendation artifact under
+  `results/recommendations/`; every model remains visible, quality thresholds
+  gate eligibility, dense ties are preserved, and missing evidence is explicit
+- Added configurable `MODEL_COMPASS_WEIGHTS` overrides for the default
+  quality/security/cost/performance weighting, with effective weights and
+  catalog version recorded in run metadata
+- Added Model Compass recommendation views to the Streamlit dashboard and the
+  static HTML export
+
+- Experimental multi-turn scenario foundation with bounded trajectories,
+  deterministic suite hashes, explicit abort/leak outcomes, and optional
+  scenario correlation fields in the call-cost ledger; existing security and
+  quality profiles remain unchanged until integration is validated
+- The `SECURITY_MODE=extended` profile now includes two internally authored
+  bounded sequential prompt-injection scenarios; it preserves the canary over
+  each trajectory and reports first-leak/turn metadata separately
 - `collect`/`merge` CLI output now states which phase is running (`Phase 1/3`,
   `Phase 3/3`), ends with a bordered `✅ Done` summary, and prints an explicit
   next command (`@judge-coordinator` + `make merge`, `make dashboard`, or

@@ -1,10 +1,10 @@
-# Contributing to llm-model-screening
+# Contributing to Model Compass
 
 ## Setup
 
 ```bash
 git clone <repo>
-cd llm-model-screening
+cd model-compass
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev,docs]"

@@ -1,16 +1,18 @@
-# llm-model-screening — AI Agent Instructions
+# model-compass — AI Agent Instructions
 
 > This file is read by GitHub Copilot, Claude Code, and other AI agents.
 
 ## Project Overview
 
-Research and decision-support tooling for screening OpenRouter LLMs across
-quality, security, performance, and cost. Results are pre-selection evidence,
-not final model recommendations; domain acceptance belongs in `gen-e2-eval`.
+Research and decision-support tooling for evaluating OpenRouter LLMs across
+quality, security, performance, and model-only cost. Model Compass produces
+generic use-case recommendations and evidence; final client acceptance remains
+human and domain-specific, with `gen-e2-eval` used when a client dataset exists.
 
 ## Architecture & Conventions
 
-- Core pipeline code lives in `src/`; Streamlit and shared presentation helpers
+- Core pipeline code lives in `src/`; the versioned generic use-case catalog is
+  `data/catalog/model_compass_use_cases.json`; Streamlit and shared presentation helpers
   live in `dashboard/`; operational scripts live in `scripts/`
 - The production workflow is split into three phases:
   `make collect` → `@judge-coordinator` → `make merge`
@@ -18,8 +20,12 @@ not final model recommendations; domain acceptance belongs in `gen-e2-eval`.
   model catalog without chat-completion cost
 - `make export-html` builds a static dashboard; `make dashboard` launches the
   interactive Streamlit view
+- `MODEL_COMPASS_WEIGHTS` optionally overrides the catalog's quality/security/
+  cost/performance weights as JSON; effective weights and catalog version must
+  remain in every recommendation artifact
 - Follow language-specific rules in `.github/instructions/` (Copilot) and `.claude/rules/` (Claude Code)
 - All AI artifacts are organised under `.github/` (Copilot) and `.claude/` (Claude Code)
+- Experimental multi-turn scenario contracts live in `src/evaluators/scenario_runner.py`; keep them separate from legacy single-turn scoring until the security integration and comparability metadata are complete
 
 ## Quality Evidence Rules
 
@@ -53,6 +59,14 @@ not final model recommendations; domain acceptance belongs in `gen-e2-eval`.
 - A judge that does not score every expected (prompt_id, attempt, alias) fails
   the merge immediately (`ValueError`) instead of silently reducing that
   response's average to fewer judges
+- Quality eligibility is evaluated per generic use case before weighted ranking;
+  a model below a use-case threshold cannot be recommended because it is cheap
+  or fast
+- Every model remains visible for every catalog use case. Equal recommendation
+  scores keep the same dense rank; do not add arbitrary provider/model-name
+  tie-breakers
+- Missing security, cost, or performance evidence yields an explicit
+  `insufficient_decision_evidence` status and no recommendation rank
 - For `QUALITY_REPETITIONS > 1`, use the attempts already collected to assess
   stability; do not add redundant rechecks
 - `make verify-quality ARGS="..."` is an optional, paid OpenRouter-only
@@ -70,6 +84,7 @@ not final model recommendations; domain acceptance belongs in `gen-e2-eval`.
 ## Result Artifacts
 
 - Summary benchmarks: `results/benchmark_<timestamp>.{csv,json}`
+- Model Compass recommendations: `results/recommendations/benchmark_<timestamp>_recommendations.{csv,json}`
 - Quality transcripts and judge reasoning: `results/quality_details/`
 - Technical collection failures: `results/quality_diagnostics/`
 - Optional `k=1` rechecks: `results/verification/`

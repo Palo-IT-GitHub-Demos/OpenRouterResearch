@@ -1,0 +1,54 @@
+{
+  "catalog_version": "model-compass-use-cases-v1",
+  "description": "Initial generic use-case catalog for Model Compass. Thresholds are provisional until calibrated against representative evaluation evidence.",
+  "weights": {
+    "quality": 0.5,
+    "security": 0.25,
+    "cost": 0.2,
+    "performance": 0.05
+  },
+  "use_cases": [
+    {
+      "id": "structured_extraction",
+      "name": "Structured extraction",
+      "description": "Return structured data that follows an explicit schema.",
+      "prompt_ids": [0, 1, 2],
+      "minimum_quality_score": 4.0
+    },
+    {
+      "id": "code_generation",
+      "name": "Code generation",
+      "description": "Generate small, syntactically valid code that satisfies a contract.",
+      "prompt_ids": [3],
+      "minimum_quality_score": 4.0
+    },
+    {
+      "id": "factual_qa",
+      "name": "Factual question answering",
+      "description": "Answer short factual questions accurately and concisely.",
+      "prompt_ids": [4, 5, 6],
+      "minimum_quality_score": 4.0
+    },
+    {
+      "id": "reasoning_analysis",
+      "name": "Reasoning and analysis",
+      "description": "Solve elementary calculations, sequences, and logical deductions.",
+      "prompt_ids": [7, 8, 9],
+      "minimum_quality_score": 4.0
+    },
+    {
+      "id": "instruction_following",
+      "name": "Instruction following",
+      "description": "Follow precise output and clarification instructions.",
+      "prompt_ids": [10, 11, 12, 15],
+      "minimum_quality_score": 4.0
+    },
+    {
+      "id": "concise_communication",
+      "name": "Concise communication",
+      "description": "Produce helpful, safe, and concise business communication.",
+      "prompt_ids": [13, 14],
+      "minimum_quality_score": 3.5
+    }
+  ]
+}

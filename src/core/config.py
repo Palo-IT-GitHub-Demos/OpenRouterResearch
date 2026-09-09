@@ -81,7 +81,8 @@ class Settings(BaseSettings):
     # "owasp" (data/prompts/owasp_probes.json — 30 internally authored probes
     # aligned with the OWASP GenAI LLM Top 10 2026, required for the dashboard's
     # RSI/heatmap), or "extended" (data/prompts/extended_probes.json — 15
-    # advanced LLM01 red-team probes). Resolved by
+    # advanced LLM01 red-team probes, including bounded sequential scenarios).
+    # Resolved by
     # ``main._resolve_security_probes_path``. Ignored
     # when security_probes_path below is set (that always wins).
     security_mode: str = "basic"
@@ -100,6 +101,10 @@ class Settings(BaseSettings):
 
     # Abort a run when security probe transport failures exceed this ratio.
     max_security_probe_error_rate: float = Field(default=0.15, ge=0.0, le=1.0)
+
+    # Optional JSON override for the Model Compass decision weights. When
+    # absent, the versioned use-case catalog supplies the 50/25/20/5 default.
+    model_compass_weights: str | None = None
 
     # ── Cost modeling ──────────────────────────────────────────────────────────
     # Workload profile used for TCO/CER calculations.

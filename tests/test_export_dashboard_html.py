@@ -48,6 +48,27 @@ def _write_sample_csv(tmp_path: Path) -> Path:
     return p
 
 
+def _write_sample_recommendations(tmp_path: Path) -> None:
+    recommendations_dir = tmp_path / "recommendations"
+    recommendations_dir.mkdir()
+    pd.DataFrame(
+        {
+            "use_case_name": ["Structured extraction"],
+            "catalog_version": ["model-compass-use-cases-v1"],
+            "model": ["openai/gpt-4o-mini"],
+            "recommendation_status": ["recommended"],
+            "recommendation_rank": [1],
+            "recommendation_score": [88.2],
+            "quality_score": [4.8],
+            "quality_coverage_rate": [1.0],
+            "security_score": [80.0],
+            "cost_score": [95.0],
+            "performance_score": [90.0],
+            "evidence_missing": [""],
+        }
+    ).to_csv(recommendations_dir / "benchmark_test_recommendations.csv", index=False)
+
+
 class TestMainCli:
     def test_writes_html_file(self, tmp_path: Path) -> None:
         results = _write_sample_csv(tmp_path)
@@ -74,6 +95,7 @@ class TestMainCli:
 
     def test_sections_explain_indicators_for_non_specialists(self, tmp_path: Path) -> None:
         results = _write_sample_csv(tmp_path)
+        _write_sample_recommendations(tmp_path)
         output = tmp_path / "dashboard.html"
         main(["--results", str(results), "--output", str(output)])
 
@@ -83,12 +105,15 @@ class TestMainCli:
         security = (bundle_dir / "security.html").read_text(encoding="utf-8")
         cost = (bundle_dir / "cost.html").read_text(encoding="utf-8")
         performance = (bundle_dir / "performance.html").read_text(encoding="utf-8")
+        recommendations = (bundle_dir / "recommendations.html").read_text(encoding="utf-8")
 
         assert "quality runs from 1 (poor) to 5 (excellent)" in overview
         assert "Coverage tells you how much of the test was completed" in quality
         assert "RSI is a safety score from 0 to 100" in security
         assert "TCO is the estimated monthly bill" in cost
         assert "p50 is the typical response time" in performance
+        assert "Model Compass" in recommendations
+        assert "Structured extraction" in recommendations
 
     def test_every_page_with_a_chart_loads_plotly(self, tmp_path: Path) -> None:
         """Each page is a standalone file: relying on another page to have loaded

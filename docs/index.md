@@ -1,18 +1,23 @@
-# LLM Model Screening
+# Model Compass
 
-Pipeline de **screening comparatif et reproductible** des modèles disponibles
-sur OpenRouter. Elle réduit l'espace de recherche en comparant les modèles sur
-des critères transverses de qualité générique, de coût, de latence et de
-sécurité, afin de constituer une shortlist avant l'évaluation métier dans
-[gen-e2-eval](https://github.com/GLOBAL-PALO-IT/gen-e2-eval).
+Pipeline de **recommandation technique, comparative et reproductible** des
+modèles disponibles sur OpenRouter. Model Compass compare les modèles sur des
+critères transverses de qualité, sécurité, coût du modèle et performance, puis
+les classe par cas d'usage générique pour aider un humain à répondre à
+différents appels d'offres.
 
-## Trois axes de mesure
+Le [scope détaillé](model-compass-scope.md) formalise les décisions prises, les
+limites et les seuils provisoires du catalogue initial.
+
+## Quatre dimensions de mesure
 
 | Axe | Ce que ça mesure | Sortie clé |
 | --- | --- | --- |
 | **Qualité** | 16 prompts versionnés, 6 dimensions, score macro-moyen 1-5 + taux de couverture + stabilité optionnelle | `avg_quality_score`, `quality_coverage_rate`, `quality_stability_score` |
 | **Sécurité** | 30 sondes [OWASP GenAI LLM Top 10 2026](https://genai.owasp.org/resource/owasp-genai-llm-top-10-2026/), score RSI 0-100 (pondération interne, non publiée par OWASP — cf. `_RSI_WEIGHTS` dans `security_scanner.py`), vérification ZDR | `rsi`, `leak_count`, `zero_data_retention` |
 | **Coût** | Tarif OpenRouter × profil de charge → TCO mensuel projeté + coût réel par appel (`response.usage.cost`) | `tco_usd`, `actual_cost_credits`, `cer` |
+| **Performance** | Latence P50/P95 et tokens/seconde mesurés après acquisition du semaphore | `actual_latency_p50_ms`, `actual_latency_p95_ms`, `actual_tokens_per_second` |
+| **Recommandation** | Catalogue versionné, seuil qualité par cas d'usage et score pondéré configurable | `results/recommendations/` |
 
 ## Voir les résultats
 
@@ -45,45 +50,50 @@ Les deux projets répondent à des questions différentes et ne produisent pas
 le même type de décision :
 
 ```text
-LLM Model Screening          gen-e2-eval
+Model Compass                gen-e2-eval
 ──────────────────────────   ────────────────────────────────
-~200 modèles OpenRouter       5-10 modèles présélectionnés
+Tous les modèles évalués     Modèles testés sur les tâches métier
 
-Question : « sain et         Question : « réussit-il
-abordable ? »                mes tâches métier ? »
+Question : « quel modèle      Question : « réussit-il
+est pertinent par cas ? »    mes tâches métier ? »
 
-→ shortlist annotée           → recommandation par use-case
+→ recommandation technique    → acceptation métier
 ```
 
-L'export `make export-gen-e2` génère un YAML injectable dans le shortlist
+L'export `make export-gen-e2` génère un YAML injectable dans le registry
 quadrant de gen-e2-eval avec les colonnes sécurité et TCO.
 
 ### Périmètre et règle de décision
 
-LLM Model Screening inclut :
+Model Compass inclut :
 
 - la comparaison à grande échelle de modèles accessibles via OpenRouter ;
 - un screen de qualité générique, provider-neutral et versionné ;
 - les mesures de coût, de latence et de sécurité ;
-- la production d'une shortlist et de métadonnées traçables pour la suite.
+- la production d'un classement et d'un ou plusieurs modèles recommandés par
+  cas d'usage générique ;
+- un rapport de preuves sous `results/recommendations/`.
 
-LLM Model Screening n'inclut pas :
+Model Compass n'inclut pas :
 
 - la validation d'un workflow métier ou d'une golden dataset client ;
 - la mesure de la réussite fonctionnelle sur un use case ;
-- la recommandation finale d'un modèle pour une application ;
-- le remplacement des annotations humaines ou de l'évaluation dans
-  `gen-e2-eval`.
+- l'analyse automatique d'un appel d'offres ou l'extraction de ses exigences ;
+- la recommandation finale d'adoption pour une application ;
+- le remplacement de l'évaluation métier dans `gen-e2-eval`.
 
-La règle de décision est donc la suivante : les résultats de ce projet servent
-à filtrer et prioriser les modèles ; toute décision d'adoption doit être
-confirmée dans `gen-e2-eval` sur les tâches métier concernées.
+La règle de décision est donc la suivante : tous les modèles restent visibles,
+le seuil qualité filtre l'éligibilité par cas d'usage, puis le score pondéré
+classe les modèles dont les preuves sont complètes. Les égalités sont
+conservées. Toute décision d'adoption reste humaine et peut être confirmée
+dans `gen-e2-eval` sur les tâches métier concernées.
 
 ## Structure de la documentation
 
 | Espace | Contenu | Source de vérité |
 | --- | --- | --- |
 | Guide du pipeline | Exécution, entrées, sorties et interprétation | `docs/workflow.md` |
+| Scope Model Compass | Mission, logique de décision, limites et calibrations restantes | `docs/model-compass-scope.md` |
 | Méthodologie qualité | Provenance des prompts, couverture, validation, comparaison `gen-e2-eval` | `docs/quality-methodology.md` |
 | Référence API | Classes, fonctions et signatures publiques | Docstrings dans `src/` et `dashboard/` |
 | ADR | Décisions d'architecture et compromis | `docs/adr/` |

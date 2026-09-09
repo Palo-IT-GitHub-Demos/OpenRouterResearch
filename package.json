@@ -1,7 +1,7 @@
 {
-  "name": "llm-model-screening",
+  "name": "model-compass",
   "version": "0.2.0",
-  "description": "Doing researches on openrouter llm evaluation considering Security, Performance and cost",
+  "description": "Evidence-based LLM selection across generic enterprise use cases",
   "private": true,
   "type": "module",
   "scripts": {

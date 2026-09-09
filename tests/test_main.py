@@ -27,6 +27,7 @@ from src.main import (
     _enforce_collect_error_budget,
     _estimate_free_tier_request_volume,
     _resolve_security_probes_path,
+    _run_preflight_checks,
     _select_models_command,
     _unknown_target_models,
     _validate_pending_payload,
@@ -859,6 +860,38 @@ class TestResolveSecurityProbesPath:
     def test_unknown_security_mode_raises_a_clear_error(self) -> None:
         with pytest.raises(ValueError, match="Unknown SECURITY_MODE 'bogus'"):
             _resolve_security_probes_path(self._settings(security_mode="bogus"))
+
+
+class TestPreflightSequentialProbeLogging:
+    """`_run_preflight_checks` surfaces expected vs worst-case call counts for
+    sequential (multi-turn) probes — informational only, never gates a run."""
+
+    def test_logs_expected_and_worst_case_call_counts_for_sequential_probes(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        probes_path = tmp_path / "probes.json"
+        probes_path.write_text(json.dumps([{"name": "scenario", "category_id": "LLM01", "turns": ["one", "two"]}]))
+        settings = Settings(
+            openrouter_api_key="sk-test",
+            target_models="openai/gpt-4o-mini",
+            security_probes_path=str(probes_path),
+            max_retries=3,
+            _env_file=None,
+        )  # type: ignore[call-arg]
+
+        with caplog.at_level("INFO"):
+            _run_preflight_checks(settings)
+
+        assert any("Sequential security scenarios detected" in record.message for record in caplog.records)
+        assert any("worst case 6" in record.message for record in caplog.records)
+
+    def test_does_not_log_for_single_turn_probes(self, caplog: pytest.LogCaptureFixture) -> None:
+        settings = Settings(openrouter_api_key="sk-test", target_models="openai/gpt-4o-mini", _env_file=None)  # type: ignore[call-arg]
+
+        with caplog.at_level("INFO"):
+            _run_preflight_checks(settings)
+
+        assert not any("Sequential security scenarios detected" in record.message for record in caplog.records)
 
 
 class TestMainDispatch:

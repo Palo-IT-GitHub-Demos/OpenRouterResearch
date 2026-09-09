@@ -1,8 +1,8 @@
 ---
-goal: Fiabiliser et industrialiser llm-model-screening
+goal: Fiabiliser et industrialiser Model Compass
 version: 1.0
 date_created: 2026-09-06
-owner: llm-model-screening
+owner: model-compass
 status: In progress
 tags: [improvement, reliability, ci, reproducibility, observability]
 ---

@@ -11,6 +11,7 @@ from dashboard.data_prep import (
     compute_cost_columns,
     enrich_benchmark,
     load_quality_details,
+    load_recommendations,
     parse_judge_verdicts,
     quality_dimension_long_frame,
     quality_dimension_table,
@@ -234,6 +235,25 @@ class TestLoadQualityDetails:
         details_df = load_quality_details(benchmark_path)
 
         assert details_df.loc[0, "verification_status"] == "not_reproduced"
+
+
+class TestLoadRecommendations:
+    def test_loads_sibling_recommendation_file(self, tmp_path: Path) -> None:
+        benchmark_path = tmp_path / "benchmark_20260101_000000.csv"
+        recommendations_dir = tmp_path / "recommendations"
+        recommendations_dir.mkdir()
+        pd.DataFrame({"model": ["model-a"], "recommendation_status": ["recommended"]}).to_csv(
+            recommendations_dir / "benchmark_20260101_000000_recommendations.csv", index=False
+        )
+
+        recommendations = load_recommendations(benchmark_path)
+
+        assert recommendations.loc[0, "recommendation_status"] == "recommended"
+
+    def test_returns_empty_when_artifact_is_missing(self, tmp_path: Path) -> None:
+        benchmark_path = tmp_path / "benchmark_20260101_000000.csv"
+
+        assert load_recommendations(benchmark_path).empty
 
 
 class TestParseJudgeVerdicts:

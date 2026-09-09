@@ -1,4 +1,4 @@
-# Manager Brief - LLM Model Screening Progress
+# Manager Brief - Model Compass Progress
 
 > **Statut du document :** support de pilotage daté, destiné au suivi de projet
 > et à la préparation des échanges. Ce brief n'est pas une source normative de
@@ -9,33 +9,33 @@ Date: 2026-08-18 (updated — see revision note at the end)
 
 ## 0. What This Project Is (Plain-English Primer)
 
-This repository ("llm-model-screening") performs a comparative **screening** of
+This repository ("model-compass") performs a comparative **screening** of
 Large Language Models (LLMs) available through the
 [OpenRouter](https://openrouter.ai/) API aggregator, so we can build a
 **shortlist** before doing a deeper, business-specific evaluation in the sister
 project `gen-e2-eval`. Full pitch and positioning vs.
-`gen-e2-eval`: [README.md](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/README.md) and [docs/index.md](index.md).
+`gen-e2-eval`: [README.md](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/README.md) and [docs/index.md](index.md).
 
 It scores every model on **three axes**, computed by three independent modules:
 
 | Axis | What it measures | Code | Key outputs |
 | --- | --- | --- | --- |
-| Quality | Generic pre-screen (not a business benchmark) | [src/evaluators/quality_judge.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/evaluators/quality_judge.py) | `avg_quality_score`, `quality_coverage_rate` |
-| Security | Prompt-injection / OWASP LLM Top 10 red-teaming | [src/evaluators/security_scanner.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/evaluators/security_scanner.py) | `rsi`, `leak_count`, `zero_data_retention` |
-| Cost | Live pricing + projected TCO + real per-call cost | [src/evaluators/cost_analyzer.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/evaluators/cost_analyzer.py) | `tco_usd`, `actual_cost_credits`, `cer` |
+| Quality | Generic pre-screen (not a business benchmark) | [src/evaluators/quality_judge.py](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/src/evaluators/quality_judge.py) | `avg_quality_score`, `quality_coverage_rate` |
+| Security | Prompt-injection / OWASP LLM Top 10 red-teaming | [src/evaluators/security_scanner.py](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/src/evaluators/security_scanner.py) | `rsi`, `leak_count`, `zero_data_retention` |
+| Cost | Live pricing + projected TCO + real per-call cost | [src/evaluators/cost_analyzer.py](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/src/evaluators/cost_analyzer.py) | `tco_usd`, `actual_cost_credits`, `cer` |
 
 The output is a shortlist signal, not a final model recommendation. This
 repository does not evaluate client workflows, golden datasets or functional
 success criteria; those decisions belong to `gen-e2-eval`.
 
-The pipeline runs in **3 phases**, orchestrated by [src/main.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/main.py)
-and driven by `make` targets defined in [Makefile](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/Makefile):
+The pipeline runs in **3 phases**, orchestrated by [src/main.py](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/src/main.py)
+and driven by `make` targets defined in [Makefile](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/Makefile):
 
 1. **`make collect`** — calls every target model, runs cheap deterministic checks
    in pure code, and (only for the prompts that need human-like judgment) writes
    an anonymised `judging_*.json` file to `data/intermediate/`.
 2. **Blind judging in Copilot chat** — invoking `@judge-coordinator` runs three
-   agents in parallel ([.github/agents/judge-anthropic.agent.md](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/.github/agents/judge-anthropic.agent.md),
+   agents in parallel ([.github/agents/judge-anthropic.agent.md](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/.github/agents/judge-anthropic.agent.md),
    `judge-openai.agent.md`, `judge-google.agent.md`), each scoring the anonymised
    responses without knowing which model produced them (no extra OpenRouter cost).
 3. **`make merge`** — averages the 3 judges' scores, merges in pricing + security
@@ -45,7 +45,7 @@ The coordinator owns workspace file access: judges return JSON only, while the
 coordinator validates and writes the three `scores_{timestamp}_*.json` files.
 The full step-by-step, including configuration variables and metric definitions,
 is documented in [docs/workflow.md](workflow.md). A local dashboard
-(`streamlit run dashboard/app.py`, code in [dashboard/app.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/dashboard/app.py))
+(`streamlit run dashboard/app.py`, code in [dashboard/app.py](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/dashboard/app.py))
 plots a quality-vs-cost Pareto frontier with security colour-coding.
 
 Architecture rationale and trade-offs are recorded as ADRs in
@@ -59,7 +59,7 @@ Planned/in-progress engineering work is tracked in
 The project is operational end-to-end for LLM pre-selection on the three axes
 above. Since the previous brief, the judging system moved fully to blind
 Copilot agents (no OpenRouter LLM-judge call — see
-[.github/agents/judge-coordinator.agent.md](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/.github/agents/judge-coordinator.agent.md)),
+[.github/agents/judge-coordinator.agent.md](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/.github/agents/judge-coordinator.agent.md)),
 and the security scanner was extended toward full OWASP LLM Top 10 coverage
 (see [docs/plans/feature-security-cost-specialization-1.md](plans/feature-security-cost-specialization-1.md),
 status "In progress").
@@ -75,26 +75,26 @@ duplicated here because it changes as the pipeline evolves.
 
 ## 2. What Is Delivered
 
-- A 3-phase benchmark pipeline (see [src/main.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/main.py) and
-  [Makefile](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/Makefile) targets `collect` / `judge` / `merge`):
+- A 3-phase benchmark pipeline (see [src/main.py](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/src/main.py) and
+  [Makefile](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/Makefile) targets `collect` / `judge` / `merge`):
   - Phase 1: collect responses + deterministic checks + security scan
   - Phase 2: coordinator passes the anonymised batch to 3 Copilot agents in
     parallel and writes their validated JSON outputs (only for undecidable prompts)
   - Phase 3: merge scores and export final results to `results/`
 - A Streamlit dashboard for quality-cost-security comparison
-  ([dashboard/app.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/dashboard/app.py), [dashboard/pareto.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/dashboard/pareto.py))
+  ([dashboard/app.py](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/dashboard/app.py), [dashboard/pareto.py](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/dashboard/pareto.py))
 - A documented and repeatable workflow ([docs/workflow.md](workflow.md))
 - Cost tracking and audit-ready artifacts (per-call cost ledger exported under
-  `results/call_costs/`, see [src/evaluators/cost_analyzer.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/evaluators/cost_analyzer.py))
+  `results/call_costs/`, see [src/evaluators/cost_analyzer.py](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/src/evaluators/cost_analyzer.py))
 - A gen-e2-eval export script for handing off the shortlist
-  ([scripts/export_gen_e2_registry.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/scripts/export_gen_e2_registry.py))
+  ([scripts/export_gen_e2_registry.py](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/scripts/export_gen_e2_registry.py))
 
 ## 3. How To Read The Metrics (Simple Definitions)
 
 ### Quality Dimensions
 
 In this project, a "dimension" means one evaluation skill family. The prompt
-suite lives in [data/prompts/quality_prompts.json](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/data/prompts/quality_prompts.json)
+suite lives in [data/prompts/quality_prompts.json](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/data/prompts/quality_prompts.json)
 (versioned and hashed as `quality_suite_id`, so a score is always traceable to
 an exact prompt set). We currently use 6 dimensions:
 
@@ -110,7 +110,7 @@ Full dimension breakdown and prompt counts: [docs/workflow.md](workflow.md), sec
 ### Coverage
 
 Coverage means how complete the evaluation is. These columns are computed in
-[src/evaluators/quality_judge.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/evaluators/quality_judge.py):
+[src/evaluators/quality_judge.py](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/src/evaluators/quality_judge.py):
 
 - quality_coverage_rate: percentage of prompts successfully scored
 - quality_dimension_coverage_rate: percentage of dimensions represented in the final score
@@ -122,12 +122,12 @@ If coverage is low, confidence in ranking is lower.
 - LLM (Large Language Model)
 - OWASP (Open Worldwide Application Security Project) — probes defined in
   `data/prompts/owasp_probes.json`, scored by
-  [src/evaluators/security_scanner.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/evaluators/security_scanner.py)
+  [src/evaluators/security_scanner.py](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/src/evaluators/security_scanner.py)
 - RSI (Robustness Safety Index) — 0-100 aggregate security score, see
   [docs/workflow.md](workflow.md) section "Stage Sécurité"
 - ZDR (Zero Data Retention) — provider policy flag
 - TCO (Total Cost of Ownership) — see
-  [src/evaluators/cost_analyzer.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/evaluators/cost_analyzer.py) `compute_tco`
+  [src/evaluators/cost_analyzer.py](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/src/evaluators/cost_analyzer.py) `compute_tco`
 - CER (Cost Efficiency Ratio) — `quality_score / tco_per_month`
 - API (Application Programming Interface)
 
@@ -137,9 +137,9 @@ Free-tier test runs were useful for technical validation of the pipeline.
 They are not the right basis for business decision-making because they are
 affected by rate limits (`429`) and shared-pool instability. Concurrency is
 capped by `MAX_CONCURRENT_REQUESTS` (default `3`) in
-[src/core/config.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/core/config.py), specifically to avoid free-tier
+[src/core/config.py](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/src/core/config.py), specifically to avoid free-tier
 rate limits — see also the retry/back-off logic in
-[src/api/openrouter_client.py](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/src/api/openrouter_client.py).
+[src/api/openrouter_client.py](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/src/api/openrouter_client.py).
 
 For management decisions, we should rely on stable runs with a dedicated project API key.
 
@@ -246,7 +246,7 @@ first runs, and any further budget request will be based on measured usage.
 This brief was refreshed on 2026-08-18 to reflect the current state of the
 code (test count, blind-judging architecture, OWASP security expansion) and
 to add direct links to the source files behind each claim. For a from-scratch
-understanding of the project, start with [README.md](https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch/blob/main/README.md) and
+understanding of the project, start with [README.md](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/README.md) and
 [docs/index.md](index.md), then [docs/workflow.md](workflow.md) for the
 step-by-step pipeline mechanics.
 

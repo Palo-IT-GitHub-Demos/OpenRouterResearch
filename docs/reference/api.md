@@ -37,6 +37,10 @@ build de la documentation. Son comportement est décrit en prose dans
 
 ::: src.evaluators.quality_metrics
 
+### Model Compass — recommandations
+
+::: src.evaluators.recommendation
+
 ### Sécurité
 
 ::: src.evaluators.security_scanner

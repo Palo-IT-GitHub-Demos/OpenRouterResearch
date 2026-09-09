@@ -52,7 +52,20 @@ from src.evaluators.quality_judge import (
     quality_suite_id,
 )
 from src.evaluators.quality_metrics import build_quality_details, summarize_quality_dimensions, summarize_quality_scores
-from src.evaluators.security_scanner import AsyncSecurityScanner, SecurityScanner, probe_count
+from src.evaluators.recommendation import (
+    DEFAULT_USE_CASE_CATALOG_PATH,
+    RecommendationWeights,
+    build_recommendation_report,
+    load_use_case_catalog,
+    parse_recommendation_weights,
+)
+from src.evaluators.security_scanner import (
+    AsyncSecurityScanner,
+    SecurityScanner,
+    has_sequential_probes,
+    probe_count,
+    probe_worst_case_count,
+)
 from src.observability.events import log_event
 from src.observability.tracker import ExperimentTracker
 
@@ -66,6 +79,7 @@ logger = logging.getLogger(__name__)
 _RESULTS_DIR = Path("results")
 _INTERMEDIATE_DIR = Path("data/intermediate")
 _QUALITY_PROMPTS = Path("data/prompts/quality_prompts.json")
+_USE_CASE_CATALOG = DEFAULT_USE_CASE_CATALOG_PATH
 _DRY_RUN_DIR = Path("data/dry_run")
 _MIN_QUALITY_COVERAGE_FOR_CER = 0.8
 _TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S"
@@ -153,6 +167,11 @@ def _security_probe_count_for_estimate(probes_path: Path | None) -> int:
         return 0
 
 
+def _effective_recommendation_weights(settings: Settings) -> RecommendationWeights | None:
+    """Return validated Model Compass weights configured for this run."""
+    return parse_recommendation_weights(settings.model_compass_weights)
+
+
 # Named, pre-wired security probe sets — see Settings.security_mode.
 _SECURITY_MODE_PROBE_PATHS: dict[str, Path | None] = {
     "basic": None,
@@ -169,7 +188,7 @@ def _resolve_security_probes_path(settings: Settings) -> Path | None:
     never have to remember/type a file path: "basic" (built-in), "owasp"
     (30 internally authored probes aligned with the OWASP GenAI LLM Top 10 2026
     categories — required for the dashboard's RSI/heatmap), or "extended"
-    (15 advanced LLM01 red-team probes).
+    (advanced LLM01 red-team probes, including bounded multi-turn scenarios).
     """
     if settings.security_probes_path:
         return Path(settings.security_probes_path)
@@ -286,11 +305,19 @@ class AsyncPipeline:
                 quality_suite_id=suite_id,
                 actual_call_costs=actual_call_costs,
             )
+            recommendations = build_recommendation_report(
+                result,
+                quality_df,
+                _USE_CASE_CATALOG,
+                weights=_effective_recommendation_weights(self._settings),
+            )
             self._log_results(result, quality_df, security_df)
             self._tracker.log_dataframe("benchmark_results", result)
             if not actual_call_costs.empty:
                 self._tracker.log_dataframe("actual_call_costs", actual_call_costs)
-            _export(result, actual_call_costs)
+            if not recommendations.empty:
+                self._tracker.log_dataframe("model_compass_recommendations", recommendations)
+            _export(result, actual_call_costs, recommendations=recommendations)
             return result
         finally:
             self._tracker.end_run()
@@ -510,6 +537,7 @@ def _export(
     actual_call_costs: pd.DataFrame | None = None,
     quality_details: pd.DataFrame | None = None,
     quality_diagnostics: pd.DataFrame | None = None,
+    recommendations: pd.DataFrame | None = None,
 ) -> Path:
     """Export summary results and available audit artifacts."""
     _RESULTS_DIR.mkdir(exist_ok=True)
@@ -539,7 +567,42 @@ def _export(
         quality_diagnostics.to_csv(f"{diagnostics_stem}.csv", index=False)
         quality_diagnostics.to_json(f"{diagnostics_stem}.json", orient="records", indent=2)
         logger.info("Quality collection diagnostics exported to '%s.{csv,json}'", diagnostics_stem)
+    if recommendations is not None and not recommendations.empty:
+        recommendation_stem = _write_recommendation_artifact(recommendations, stem)
+        logger.info("Model Compass recommendations exported to '%s.{csv,json}'", recommendation_stem)
     return stem
+
+
+def _recommendation_stem(benchmark_stem: Path) -> Path:
+    """Return the sibling artifact stem for a benchmark's recommendations."""
+    return benchmark_stem.parent / "recommendations" / f"{benchmark_stem.name}_recommendations"
+
+
+def _write_recommendation_artifact(recommendations: pd.DataFrame, benchmark_stem: Path) -> Path:
+    """Write the one-row-per-use-case/model recommendation artifact."""
+    recommendation_stem = _recommendation_stem(benchmark_stem)
+    recommendation_stem.parent.mkdir(exist_ok=True)
+    recommendations.to_csv(f"{recommendation_stem}.csv", index=False)
+    recommendations.to_json(f"{recommendation_stem}.json", orient="records", indent=2)
+    return recommendation_stem
+
+
+def _merge_recommendation_weights(
+    settings: Settings,
+    pending: dict[str, object],
+    default_weights: RecommendationWeights,
+) -> RecommendationWeights:
+    """Resolve merge-time weights without losing collect-time provenance."""
+    configured = _effective_recommendation_weights(settings)
+    if configured is not None:
+        return configured
+    pending_weights = pending.get("model_compass_weights")
+    if pending_weights is not None:
+        try:
+            return RecommendationWeights.model_validate(pending_weights)
+        except ValueError as exc:
+            raise ValueError(f"Invalid model_compass_weights in pending artifact: {exc}") from exc
+    return default_weights
 
 
 def _quality_screen_metadata(prompts_path: Path) -> tuple[int | None, int | None, str | None]:
@@ -605,6 +668,7 @@ def _save_pending(
     security_df: pd.DataFrame,
     collect_result: CollectResult,
     actual_call_costs: pd.DataFrame,
+    recommendation_weights: RecommendationWeights | None = None,
 ) -> Path:
     """Persist intermediate data to ``data/intermediate/pending_{ts}.json``.
 
@@ -617,6 +681,8 @@ def _save_pending(
 
     payload = {
         "timestamp": timestamp,
+        "use_case_catalog_version": load_use_case_catalog(_USE_CASE_CATALOG).catalog_version,
+        "model_compass_weights": recommendation_weights.model_dump() if recommendation_weights else None,
         "models": models,
         "pricing": pricing_df.to_dict(orient="records") if not pricing_df.empty else [],
         "security": security_df.to_dict(orient="records") if not security_df.empty else [],
@@ -782,6 +848,7 @@ class CollectPipeline:
             security_df=security_df,
             collect_result=collect_result,
             actual_call_costs=actual_call_costs,
+            recommendation_weights=_effective_recommendation_weights(self._settings),
         )
 
         n_det = len(collect_result.deterministic_rows)
@@ -909,6 +976,16 @@ class MergePipeline:
         if not isinstance(pending, dict):
             raise ValueError("Invalid pending artifact: top-level JSON value must be an object.")
         _validate_pending_payload(pending)
+        current_catalog = load_use_case_catalog(_USE_CASE_CATALOG)
+        current_catalog_version = current_catalog.catalog_version
+        pending_catalog_version = pending.get("use_case_catalog_version")
+        if isinstance(pending_catalog_version, str) and pending_catalog_version:
+            if pending_catalog_version != current_catalog_version:
+                raise ValueError(
+                    "Use-case catalog changed between collect and merge: "
+                    f"pending={pending_catalog_version}, current={current_catalog_version}. "
+                    "Re-run 'make collect' before merging."
+                )
 
         models: list[str] = pending["models"]
         pricing_df = pd.DataFrame(pending.get("pricing", []))
@@ -976,6 +1053,17 @@ class MergePipeline:
             quality_suite_id=suite_id,
             actual_call_costs=actual_call_costs,
         )
+        recommendation_weights = _merge_recommendation_weights(
+            self._settings,
+            pending,
+            current_catalog.weights,
+        )
+        recommendations = build_recommendation_report(
+            result,
+            quality_df,
+            _USE_CASE_CATALOG,
+            weights=recommendation_weights,
+        )
 
         self._tracker.start_run(f"benchmark-{timestamp}")
         try:
@@ -986,18 +1074,33 @@ class MergePipeline:
                     "quality_repetitions": repetitions,
                     "workload_profile": self._settings.workload_profile,
                     "model_count": len(models),
+                    "model_compass_catalog_version": current_catalog_version,
+                    "model_compass_weights": json.dumps(recommendation_weights.model_dump(), sort_keys=True),
                 }
             )
             self._log_results(result, quality_df, security_df)
             self._tracker.log_dataframe("benchmark_results", result)
+            if not recommendations.empty:
+                self._tracker.log_dataframe("model_compass_recommendations", recommendations)
             if not actual_call_costs.empty:
                 self._tracker.log_dataframe("actual_call_costs", actual_call_costs)
         finally:
             self._tracker.end_run()
 
-        export_stem = _export(result, actual_call_costs, build_quality_details(quality_df), collection_errors)
+        export_stem = _export(
+            result,
+            actual_call_costs,
+            build_quality_details(quality_df),
+            collection_errors,
+            recommendations,
+        )
         score_files = sorted(_INTERMEDIATE_DIR.glob(f"scores_{timestamp}_*.json"))
         manifest_path = _RESULTS_DIR / f"run_{timestamp}.manifest.json"
+        recommendation_files = (
+            [Path(f"{_recommendation_stem(export_stem)}.csv"), Path(f"{_recommendation_stem(export_stem)}.json")]
+            if not recommendations.empty
+            else []
+        )
         write_run_manifest(
             output=manifest_path,
             run_id=timestamp,
@@ -1006,8 +1109,16 @@ class MergePipeline:
                 "workload_profile": self._settings.workload_profile,
                 "quality_suite_id": suite_id,
                 "quality_repetitions": repetitions,
+                "model_compass_catalog_version": current_catalog_version,
+                "model_compass_weights": recommendation_weights.model_dump(),
             },
-            artifacts=[pending_path, *score_files, Path(f"{export_stem}.csv"), Path(f"{export_stem}.json")],
+            artifacts=[
+                pending_path,
+                *score_files,
+                Path(f"{export_stem}.csv"),
+                Path(f"{export_stem}.json"),
+                *recommendation_files,
+            ],
             root=Path.cwd(),
         )
         logger.info("=" * 70)
@@ -1250,11 +1361,37 @@ def _run_preflight_checks(settings: Settings) -> None:
 
     if not _QUALITY_PROMPTS.exists():
         problems.append(f"Prompt file not found: '{_QUALITY_PROMPTS}'.")
+        quality_prompt_count: int | None = None
     else:
         try:
-            load_quality_prompts(_QUALITY_PROMPTS)
+            quality_prompt_count = len(load_quality_prompts(_QUALITY_PROMPTS))
         except ValueError as exc:
             problems.append(str(exc))
+            quality_prompt_count = None
+
+    try:
+        catalog = load_use_case_catalog(_USE_CASE_CATALOG)
+        if quality_prompt_count is not None:
+            invalid_prompt_ids = sorted(
+                {
+                    prompt_id
+                    for use_case in catalog.use_cases
+                    for prompt_id in use_case.prompt_ids
+                    if prompt_id >= quality_prompt_count
+                }
+            )
+            if invalid_prompt_ids:
+                problems.append(
+                    f"Use-case catalog '{_USE_CASE_CATALOG}' references unknown quality prompt IDs: "
+                    f"{invalid_prompt_ids}."
+                )
+    except ValueError as exc:
+        problems.append(str(exc))
+
+    try:
+        _effective_recommendation_weights(settings)
+    except ValueError as exc:
+        problems.append(str(exc))
 
     try:
         probes_path = _resolve_security_probes_path(settings)
@@ -1272,12 +1409,33 @@ def _run_preflight_checks(settings: Settings) -> None:
                     problems.append(f"'{probes_path}' must contain a non-empty JSON list.")
                 else:
                     for i, probe in enumerate(probes):
-                        if not isinstance(probe, dict) or not probe.get("message"):
+                        valid_single = isinstance(probe, dict) and bool(probe.get("message"))
+                        valid_multi = (
+                            isinstance(probe, dict)
+                            and isinstance(probe.get("turns"), list)
+                            and bool(probe.get("turns"))
+                            and all(isinstance(turn, str) and turn.strip() for turn in probe["turns"])
+                        )
+                        if not valid_single and not valid_multi:
                             problems.append(
-                                f"Probe #{i} of '{probes_path}' is invalid — 'message' key missing or empty."
+                                f"Probe #{i} of '{probes_path}' is invalid — provide a non-empty 'message' "
+                                "or a non-empty string 'turns' list."
                             )
             except json.JSONDecodeError as exc:
                 problems.append(f"'{probes_path}' contains invalid JSON: {exc}")
+
+    try:
+        if has_sequential_probes(probes_path):
+            expected = probe_count(probes_path)
+            worst_case = probe_worst_case_count(probes_path, settings.max_retries)
+            logger.info(
+                "[DRY-RUN] Sequential security scenarios detected — expected %d probe request(s) "
+                "per model, worst case %d if every request exhausts retries (informational, not blocking).",
+                expected,
+                worst_case,
+            )
+    except (OSError, ValueError):
+        pass  # already surfaced by the probe validation above
 
     if problems:
         formatted = "\n  - ".join(problems)
@@ -1378,6 +1536,7 @@ class DryRunPipeline(CollectPipeline):
         models = settings.target_models_list
 
         _run_preflight_checks(settings)
+        recommendation_weights = _effective_recommendation_weights(settings)
 
         logger.info(
             "[DRY-RUN] Offline simulation for %d model(s) — no API call, no judge agent: %s",
@@ -1408,6 +1567,8 @@ class DryRunPipeline(CollectPipeline):
 
         pending = {
             "timestamp": timestamp,
+            "use_case_catalog_version": load_use_case_catalog(_USE_CASE_CATALOG).catalog_version,
+            "model_compass_weights": recommendation_weights.model_dump() if recommendation_weights else None,
             "models": models,
             "pricing": pricing_df.to_dict(orient="records") if not pricing_df.empty else [],
             "security": security_df.to_dict(orient="records") if not security_df.empty else [],
@@ -1442,10 +1603,19 @@ class DryRunPipeline(CollectPipeline):
             quality_suite_id=collect_result.quality_suite_id,
             actual_call_costs=actual_call_costs,
         )
+        recommendations = build_recommendation_report(
+            result,
+            quality_df,
+            _USE_CASE_CATALOG,
+            weights=recommendation_weights,
+        )
 
         preview_stem = _DRY_RUN_DIR / f"benchmark_preview_{timestamp}"
         result.to_csv(f"{preview_stem}.csv", index=False)
         result.to_json(f"{preview_stem}.json", orient="records", indent=2)
+        if not recommendations.empty:
+            recommendation_stem = _write_recommendation_artifact(recommendations, preview_stem)
+            logger.info("[DRY-RUN] Model Compass recommendations → '%s.{csv,json}'", recommendation_stem)
         call_costs_stem = _DRY_RUN_DIR / f"call_costs_{timestamp}"
         actual_call_costs.to_csv(f"{call_costs_stem}.csv", index=False)
         actual_call_costs.to_json(f"{call_costs_stem}.json", orient="records", indent=2)

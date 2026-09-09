@@ -1,7 +1,9 @@
 # Copilot Repository Instructions
 
 ## Project Overview
-Doing researches on openrouter llm evaluation considering Security, Performance and cost.
+Model Compass is a decision-support pipeline for evaluating OpenRouter LLMs across
+quality, security, model-only cost and performance, then recommending models by
+generic enterprise use case. Final client acceptance remains human and domain-specific.
 This repository is built from the **gen-e2 AI-ready project template**.
 Stack: multi-language (Python + TypeScript).
 

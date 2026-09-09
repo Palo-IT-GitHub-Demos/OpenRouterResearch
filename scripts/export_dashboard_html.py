@@ -41,6 +41,7 @@ from dashboard.data_prep import (  # noqa: E402
     compute_cost_columns,
     enrich_benchmark,
     load_quality_details,
+    load_recommendations,
     quality_dimension_long_frame,
     quality_tier,
     safest_summary,
@@ -93,9 +94,7 @@ h2 { scroll-margin-top: 1rem; }
 h3 { margin-top: 1.8rem; }
 """
 
-_GLOSSARY_INTRO = (
-    "This document is a static snapshot of the LLM model screening dashboard (OpenRouter). " + GLOSSARY_INTRO
-)
+_GLOSSARY_INTRO = "This document is a static snapshot of the Model Compass dashboard (OpenRouter). " + GLOSSARY_INTRO
 
 _GLOSSARY_HTML = glossary_html(_GLOSSARY_INTRO)
 
@@ -107,6 +106,7 @@ def _latest_results_csv() -> Path | None:
 
 _PAGES = [
     ("overview", "Overview", "index.html"),
+    ("recommendations", "Model Compass", "recommendations.html"),
     ("quality", "Quality", "quality.html"),
     ("evidence", "Prompts & responses", "evidence.html"),
     ("security", "Security", "security.html"),
@@ -319,6 +319,54 @@ def _quality_section(df: pd.DataFrame) -> str:
     Use <code>gen-e2-eval</code> for a use-case evaluation after this screening.</p>
     <div class="table-wrap">{table}</div>
     {heatmap}
+    """
+
+
+def _recommendations_section(recommendations_df: pd.DataFrame) -> str:
+    """Render the Model Compass use-case/model recommendation table."""
+    if recommendations_df.empty:
+        return """
+        <h2 id="recommendations">Model Compass</h2>
+        <p class="callout">No Model Compass recommendation artifact is available for this run.
+        Re-run <code>make collect</code>, complete the judge phase, then run <code>make merge</code>.</p>
+        """
+
+    columns = [
+        "use_case_name",
+        "model",
+        "recommendation_status",
+        "recommendation_rank",
+        "recommendation_score",
+        "quality_score",
+        "quality_coverage_rate",
+        "security_score",
+        "cost_score",
+        "performance_score",
+        "evidence_missing",
+    ]
+    display = recommendations_df[[column for column in columns if column in recommendations_df.columns]].copy()
+    table = _table_html(
+        display,
+        formats={
+            "recommendation_rank": "{:.0f}",
+            "recommendation_score": "{:.1f} / 100",
+            "quality_score": "{:.2f} / 5",
+            "quality_coverage_rate": "{:.0%}",
+            "security_score": "{:.1f}",
+            "cost_score": "{:.1f}",
+            "performance_score": "{:.1f}",
+        },
+        status_column="recommendation_status",
+    )
+    catalog_version = escape(str(recommendations_df["catalog_version"].iloc[0]))
+    return f"""
+    <h2 id="recommendations">Model Compass</h2>
+    <p class="callout"><strong>How to read this:</strong> every model remains visible for every
+    generic use case. A model must first pass that use case's quality threshold; only then can the
+    weighted decision score rank it. Equal scores keep the same rank. The final choice remains human.</p>
+    <p class="meta">Use-case catalog: <strong>{catalog_version}</strong> · Weights: quality 50%,
+    security 25%, cost 20%, performance 5%.</p>
+    <div class="table-wrap">{table}</div>
     """
 
 
@@ -660,12 +708,12 @@ def build_page(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LLM Model Screening — {page_title}</title>
+<title>Model Compass — {page_title}</title>
 <style>{_CSS}</style>
 </head>
 <body>
-<h1>LLM Model Screening dashboard</h1>
-<p class="subtitle">Generic pre-selection of OpenRouter models: quality, security, cost.</p>
+<h1>Model Compass dashboard</h1>
+<p class="subtitle">Evidence-based selection of OpenRouter models by generic use case.</p>
 <p class="meta">Source: {source_label} — generated on {generated_at}</p>
 {_navigation_html(active_page, href_prefix)}
 {page_body}
@@ -679,12 +727,15 @@ def build_reports(
     profile: WorkloadProfile,
     source_label: str,
     quality_details_df: pd.DataFrame | None = None,
+    recommendations_df: pd.DataFrame | None = None,
 ) -> dict[str, str]:
     """Build the named pages that form one static dashboard bundle."""
     security_probe_df = security_probe_details_frame(df)
     quality_details = quality_details_df if quality_details_df is not None else pd.DataFrame()
+    recommendations = recommendations_df if recommendations_df is not None else pd.DataFrame()
     pages = {
         "index.html": ("Overview", "overview", f"{_GLOSSARY_HTML}{_overview_section(df)}"),
+        "recommendations.html": ("Model Compass", "recommendations", _recommendations_section(recommendations)),
         "quality.html": ("Quality", "quality", _quality_section(df)),
         "evidence.html": (
             "Prompts & responses",
@@ -742,9 +793,10 @@ def main(argv: list[str] | None = None) -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     quality_details_df = load_quality_details(results_path)
+    recommendations_df = load_recommendations(results_path)
     bundle_dir = output_path.with_suffix("")
     bundle_dir.mkdir(parents=True, exist_ok=True)
-    reports = build_reports(df, args.profile, profile, results_path.name, quality_details_df)
+    reports = build_reports(df, args.profile, profile, results_path.name, quality_details_df, recommendations_df)
     for filename, html_doc in reports.items():
         (bundle_dir / filename).write_text(html_doc, encoding="utf-8")
 

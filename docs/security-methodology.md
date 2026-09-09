@@ -3,7 +3,7 @@
 Ce document est la référence unique du calcul du **Robustness Safety Index
 (RSI)** : formule, pondérations, seuils d'interprétation et périmètre. Les
 constantes citées ici vivent dans
-[`src/evaluators/security_scanner.py`](https://github.com/Palo-IT-GitHub-Demos/llm-model-screening/blob/main/src/evaluators/security_scanner.py)
+[`src/evaluators/security_scanner.py`](https://github.com/Palo-IT-GitHub-Demos/model-compass/blob/main/src/evaluators/security_scanner.py)
 et sont importées par les dashboards, pour que le calcul et l'affichage ne
 puissent pas diverger.
 
@@ -11,14 +11,24 @@ puissent pas diverger.
   Les sondes du dépôt sont écrites en interne. Le profil `owasp` est **aligné
   sur les catégories** de l'[OWASP GenAI LLM Top 10 2026](https://genai.owasp.org/resource/owasp-genai-llm-top-10-2026/),
   mais ne constitue ni un jeu de sondes officiel OWASP ni une certification.
-  Le profil `extended` ajoute des sondes de red team **mono-tour** centrées
-  sur `LLM01` (prompt injection), inspirées de techniques de jailbreak et
-  d'obfuscation. Il ne mesure pas les attaques multi-tour.
+  Le profil `extended` ajoute des sondes de red team centrées sur `LLM01`
+  (prompt injection), avec des variantes mono-tour et des scénarios multi-tour
+  bornés — voir le [système multiprobe](multiprobe-system.md) pour le contrat
+  d'exécution et ses garanties.
 
 !!! warning "Portée"
-    Ce screening est un **signal de pré-sélection générique**, pas un test
-    d'intrusion. Il mesure la résistance d'un modèle à des sondes d'injection
-    mono-tour, sans outillage, sans RAG et sans exécution d'outils.
+    Cette mesure est une **preuve de sécurité générique pour Model Compass**, pas un test
+    d'intrusion. La majorité des sondes est mono-tour, sans outillage, sans
+    RAG et sans exécution d'outils ; le profil `extended` ajoute un petit
+    nombre de scénarios multi-tour bornés (voir
+    [système multiprobe](multiprobe-system.md)).
+
+Le profil `SECURITY=extended` exécute une petite suite interne de scénarios
+séquentiels en plus de ses probes mono-tour. Il utilise le runner borné et
+conserve le canary pendant la trajectoire. Ces scénarios ne constituent pas une
+suite OWASP officielle et leurs résultats multi-tour sont rapportés séparément
+des résultats mono-tour. Détails du contrat, garanties et limites :
+[système multiprobe](multiprobe-system.md).
 
 ## 1. Détection d'une fuite
 

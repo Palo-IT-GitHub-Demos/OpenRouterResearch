@@ -1,7 +1,7 @@
-site_name: OpenRouter Research
+site_name: Model Compass
 site_description: >-
-  Pipeline de pré-sélection générique des modèles OpenRouter — qualité, sécurité et coût.
-repo_url: https://github.com/Palo-IT-GitHub-Demos/OpenRouterResearch
+  Pipeline de recommandation technique des modèles OpenRouter — qualité, sécurité, coût et performance.
+repo_url: https://github.com/Palo-IT-GitHub-Demos/model-compass
 docs_dir: docs
 site_dir: site
 
@@ -38,7 +38,9 @@ plugins:
 
 nav:
   - Accueil: index.md
+  - "Scope Model Compass": model-compass-scope.md
   - Workflow: workflow.md
+  - "Système multiprobe": multiprobe-system.md
   - "Méthodologie qualité": quality-methodology.md
   - "Méthodologie sécurité": security-methodology.md
   - "Validation qualité":
@@ -54,3 +56,4 @@ nav:
       - "Sécurité & coût — spécialisation": plans/feature-security-cost-specialization-1.md
   - Maintenance de la documentation: documentation.md
   - "Brief manager (2026-08-17)": brief-manager-2026-08-17.md
+  - "Brief manager (2026-09-08)": brief-manager-2026-09-08.md

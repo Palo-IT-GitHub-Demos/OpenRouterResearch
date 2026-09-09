@@ -3,7 +3,7 @@
 **Statut :** Accepté
 **Date :** 2026-07-10
 **Décideurs :** @enzo.turquet (Palo IT Singapore)
-**Ticket :** Initial architecture — llm-model-screening
+**Ticket :** Initial architecture — Model Compass
 
 ---
 

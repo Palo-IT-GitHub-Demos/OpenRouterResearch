@@ -291,3 +291,24 @@ class TestExportCallCostLedger:
         assert len(summary_files) == 1
         assert len(ledger_files) == 1
         assert json.loads(ledger_files[0].read_text())[0]["actual_cost_credits"] == pytest.approx(0.00042)
+
+    def test_exports_model_compass_recommendations_as_a_sibling_artifact(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr("src.main._RESULTS_DIR", tmp_path)
+        summary = pd.DataFrame({"model": ["model-a"]})
+        recommendations = pd.DataFrame(
+            {
+                "use_case_id": ["structured_extraction"],
+                "model": ["model-a"],
+                "recommendation_status": ["recommended"],
+            }
+        )
+
+        _export(summary, recommendations=recommendations)
+
+        recommendation_files = list((tmp_path / "recommendations").glob("*_recommendations.json"))
+        assert len(recommendation_files) == 1
+        assert json.loads(recommendation_files[0].read_text())[0]["recommendation_status"] == "recommended"

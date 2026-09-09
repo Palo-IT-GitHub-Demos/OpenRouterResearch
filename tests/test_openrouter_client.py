@@ -198,6 +198,8 @@ class TestAsyncChatCompletion:
                 await client.chat_completion(
                     model="openai/gpt-4o-mini",
                     messages=[{"role": "user", "content": "Hi"}],
+                    scenario_id="security-01",
+                    turn_index=2,
                     usage_context="security_scan",
                 )
         finally:
